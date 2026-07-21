@@ -686,6 +686,238 @@ Please note that you must use English for generating video search terms; Chinese
     return search_terms
 
 
+def generate_visual_search_terms(
+    video_subject: str,
+    video_script: str,
+    amount: int = 8,
+) -> List[str]:
+    """
+    Generate more specific visual search terms for stock video matching.
+    
+    This function creates more descriptive search terms that focus on
+    visual elements rather than abstract concepts, improving the relevance
+    of downloaded video materials.
+    
+    Args:
+        video_subject: The main subject/topic of the video
+        video_script: The full video script text
+        amount: Number of search terms to generate
+    
+    Returns:
+        List of specific visual search terms (3-5 words each)
+    """
+    logger.info(f"generating visual search terms for subject: {video_subject}")
+    
+    prompt = f"""
+# Role: Visual Scene Search Terms Generator
+
+## Goals:
+Generate {amount} specific visual search terms for stock video footage.
+Each term should describe a VISUAL SCENE that would illustrate the video script.
+
+## Important Rules:
+1. Each search term must be 3-5 words describing a SPECIFIC VISUAL SCENE
+2. Terms must be in ENGLISH only
+3. Focus on WHAT YOU WOULD SEE in the video, not abstract concepts
+4. Include concrete objects, actions, settings, and lighting
+5. Terms should follow the chronological order of the script
+6. Return as a JSON array of strings
+
+## Examples of GOOD search terms:
+- "sunset over ocean waves"
+- "person typing on laptop"
+- "crowded city street at night"
+- "chef cooking in kitchen"
+- "mountain landscape drone shot"
+
+## Examples of BAD search terms (too abstract):
+- "success"
+- "money"
+- "technology"
+- "happiness"
+
+## Output Format:
+Return ONLY a JSON array of strings, nothing else.
+Example: ["visual scene 1", "visual scene 2", "visual scene 3"]
+
+## Video Subject:
+{video_subject}
+
+## Video Script:
+{video_script}
+
+Generate {amount} specific visual search terms based on the script content.
+""".strip()
+    
+    search_terms = []
+    response = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt)
+            if response.startswith("Error: "):
+                logger.error(f"failed to generate visual search terms: {response}")
+                return []
+            
+            # Try to parse JSON array from response
+            search_terms = json.loads(_strip_code_fence(response))
+            if not isinstance(search_terms, list) or not all(
+                isinstance(term, str) for term in search_terms
+            ):
+                logger.error("response is not a list of strings.")
+                continue
+            
+            # Validate each term has 3-5 words
+            validated_terms = []
+            for term in search_terms:
+                words = term.split()
+                if 3 <= len(words) <= 5:
+                    validated_terms.append(term)
+                elif len(words) < 3:
+                    # Pad short terms
+                    validated_terms.append(term)
+                else:
+                    # Truncate long terms
+                    validated_terms.append(' '.join(words[:5]))
+            
+            search_terms = validated_terms[:amount]
+            
+        except Exception as e:
+            logger.warning(f"failed to generate visual search terms: {str(e)}")
+            if response:
+                match = re.search(r"\[.*]", response, re.DOTALL)
+                if match:
+                    try:
+                        search_terms = json.loads(match.group())
+                    except Exception as e:
+                        logger.warning(f"failed to parse visual search terms: {str(e)}")
+        
+        if search_terms and len(search_terms) > 0:
+            break
+        if i < _max_retries:
+            logger.warning(f"failed to generate visual search terms, trying again... {i + 1}")
+    
+    logger.success(f"generated visual search terms: {search_terms}")
+    return search_terms
+
+
+def generate_per_sentence_search_terms(
+    video_subject: str,
+    video_script: str,
+) -> List[str]:
+    """
+    Generate search terms for each sentence in the script.
+    
+    This function splits the script into sentences and generates
+    specific visual search terms for each one, ensuring better
+    semantic matching between the narration and video content.
+    
+    Args:
+        video_subject: The main subject/topic of the video
+        video_script: The full video script text
+    
+    Returns:
+        List of search terms, one per sentence
+    """
+    from app.utils import utils
+    
+    logger.info(f"generating per-sentence search terms for subject: {video_subject}")
+    
+    # Split script into sentences
+    script_lines = utils.split_string_by_punctuations(video_script)
+    if not script_lines:
+        return []
+    
+    # Limit to reasonable number of sentences
+    max_sentences = min(len(script_lines), 15)
+    script_lines = script_lines[:max_sentences]
+    
+    prompt = f"""
+# Role: Per-Sentence Visual Search Terms Generator
+
+## Goal:
+Generate ONE specific visual search term for EACH sentence in the video script.
+Each term should visually represent what is being described in that specific sentence.
+
+## Rules:
+1. Return EXACTLY {len(script_lines)} search terms, one for each sentence
+2. Each term must be 3-5 words describing a SPECIFIC VISUAL SCENE
+3. Terms must be in ENGLISH only
+4. Focus on WHAT YOU WOULD SEE, not abstract concepts
+5. Return as a JSON array of strings (same length as sentences)
+
+## Video Subject:
+{video_subject}
+
+## Sentences to generate terms for:
+{chr(10).join(f"{i+1}. {line}" for i, line in enumerate(script_lines))}
+
+## Output Format:
+Return ONLY a JSON array with EXACTLY {len(script_lines)} search terms.
+Example: ["visual for sentence 1", "visual for sentence 2", ...]
+
+Generate ONE visual search term for each of the {len(script_lines)} sentences above.
+""".strip()
+    
+    search_terms = []
+    response = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt)
+            if response.startswith("Error: "):
+                logger.error(f"failed to generate per-sentence search terms: {response}")
+                return []
+            
+            # Parse JSON array
+            search_terms = json.loads(_strip_code_fence(response))
+            if not isinstance(search_terms, list) or not all(
+                isinstance(term, str) for term in search_terms
+            ):
+                logger.error("response is not a list of strings.")
+                continue
+            
+            # Ensure we have exactly the right number of terms
+            if len(search_terms) != len(script_lines):
+                logger.warning(
+                    f"expected {len(script_lines)} terms, got {len(search_terms)}. "
+                    "Padding or truncating..."
+                )
+                # Pad with last term if too few, or truncate if too many
+                while len(search_terms) < len(script_lines):
+                    search_terms.append(search_terms[-1] if search_terms else "stock footage")
+                search_terms = search_terms[:len(script_lines)]
+            
+            # Validate word count
+            validated_terms = []
+            for term in search_terms:
+                words = term.split()
+                if len(words) < 3:
+                    validated_terms.append(term)
+                elif len(words) > 5:
+                    validated_terms.append(' '.join(words[:5]))
+                else:
+                    validated_terms.append(term)
+            
+            search_terms = validated_terms
+            
+        except Exception as e:
+            logger.warning(f"failed to generate per-sentence search terms: {str(e)}")
+            if response:
+                match = re.search(r"\[.*]", response, re.DOTALL)
+                if match:
+                    try:
+                        search_terms = json.loads(match.group())
+                    except Exception as e:
+                        logger.warning(f"failed to parse per-sentence search terms: {str(e)}")
+        
+        if search_terms and len(search_terms) == len(script_lines):
+            break
+        if i < _max_retries:
+            logger.warning(f"failed to generate per-sentence search terms, trying again... {i + 1}")
+    
+    logger.success(f"generated {len(search_terms)} per-sentence search terms")
+    return search_terms
+
+
 # =============================================================================
 # Social publishing metadata
 #

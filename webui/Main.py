@@ -2278,6 +2278,24 @@ def _render_video_settings(panel, params):
             )
             config.app["match_materials_to_script"] = params.match_materials_to_script
 
+            # Ken Burns effect
+            params.ken_burns_enabled = st.checkbox(
+                "Ken Burns Effect",
+                help="Apply zoom/pan animation to video clips and images",
+                value=bool(config.app.get("ken_burns_enabled", True)),
+                key="ken_burns_enabled",
+            )
+            config.app["ken_burns_enabled"] = params.ken_burns_enabled
+
+            # Parallax effect
+            params.parallax_enabled = st.checkbox(
+                "Parallax Effect (2 Layers)",
+                help="Separate foreground/background and move at different speeds. Slower but more cinematic. Only works with images.",
+                value=bool(config.app.get("parallax_enabled", False)),
+                key="parallax_enabled",
+            )
+            config.app["parallax_enabled"] = params.parallax_enabled
+
             # 视频转场模式
             video_transition_modes = [
                 (tr("None"), VideoTransitionMode.none.value),
@@ -3025,6 +3043,7 @@ def _render_background_music_settings(params, elevenlabs_api_key_rendered=False)
 
 def _render_audio_settings(panel, params):
     """渲染音频设置并返回上传音频与当前配音模式。"""
+    local_audio_path = None
     with panel:
         with st.container(border=True):
             st.write(tr("Audio Settings"))
@@ -3406,6 +3425,13 @@ def _render_audio_settings(panel, params):
                     key="custom_audio_file_uploader",
                     help=tr("Upload Voiceover File Help"),
                 )
+                # Local file path input (faster than uploading)
+                local_audio_path = st.text_input(
+                    "Or enter local file path (faster)",
+                    key="local_audio_path_input",
+                    placeholder="/home/user/audio/narration.mp3",
+                    help="Path to audio file on your computer. If both upload and path are provided, upload takes priority.",
+                )
                 params.voice_volume = stable_selectbox(
                     tr("Voiceover Volume"),
                     options=[0.6, 0.8, 1.0, 1.2, 1.5, 2.0, 3.0, 4.0, 5.0],
@@ -3425,7 +3451,7 @@ def _render_audio_settings(panel, params):
                 params,
                 elevenlabs_api_key_rendered=elevenlabs_api_key_rendered,
             )
-    return uploaded_audio_file, uploaded_bgm_file, voice_mode
+    return uploaded_audio_file, uploaded_bgm_file, voice_mode, local_audio_path
 
 
 def _render_subtitle_settings(panel, params):
@@ -3442,6 +3468,26 @@ def _render_subtitle_settings(panel, params):
                 key="subtitle_enabled_checkbox",
             )
             subtitle_settings_disabled = not params.subtitle_enabled
+
+            # Word-by-word subtitles
+            params.word_by_word_subtitles = st.checkbox(
+                "Word-by-Word Subtitles (CapCut Style)",
+                help="Highlight words one by one with colored background as they are spoken",
+                value=bool(config.app.get("word_by_word_subtitles", True)),
+                key="word_by_word_subtitles",
+                disabled=subtitle_settings_disabled,
+            )
+            config.app["word_by_word_subtitles"] = params.word_by_word_subtitles
+
+            # Enhanced visual search
+            params.enhanced_visual_search = st.checkbox(
+                "Enhanced Visual Search",
+                help="Search for visual keywords instead of exact sentence text for better video matching",
+                value=bool(config.app.get("enhanced_visual_search", True)),
+                key="enhanced_visual_search",
+            )
+            config.app["enhanced_visual_search"] = params.enhanced_visual_search
+
             font_names = get_all_fonts()
             saved_font_name = config.ui.get(
                 "font_name", DEFAULT_SUBTITLE_SETTINGS["font_name"]
@@ -3534,6 +3580,30 @@ def _render_subtitle_settings(panel, params):
                     disabled=subtitle_settings_disabled,
                 )
                 config.ui["font_size"] = params.font_size
+
+            # Highlight color for word-by-word subtitles
+            highlight_cols = st.columns([0.42, 0.58])
+            with highlight_cols[0]:
+                saved_highlight_color = config.app.get("subtitle_highlight_color", "#6A0DAD")
+                st.session_state.setdefault("highlight_color_picker", saved_highlight_color)
+                params.subtitle_highlight_color = st.color_picker(
+                    "Highlight Color",
+                    key="highlight_color_picker",
+                    disabled=subtitle_settings_disabled or not params.word_by_word_subtitles,
+                )
+                config.app["subtitle_highlight_color"] = params.subtitle_highlight_color
+
+            with highlight_cols[1]:
+                saved_subtitle_size = config.app.get("subtitle_size_factor", 0.8)
+                st.session_state.setdefault("subtitle_size_factor_slider", float(saved_subtitle_size))
+                params.subtitle_size_factor = st.slider(
+                    "Subtitle Size (%)",
+                    50,
+                    150,
+                    key="subtitle_size_factor_slider",
+                    disabled=subtitle_settings_disabled,
+                )
+                config.app["subtitle_size_factor"] = params.subtitle_size_factor
 
             stroke_cols = st.columns([0.42, 0.58])
             with stroke_cols[0]:
@@ -3657,7 +3727,7 @@ def _render_subtitle_settings(panel, params):
 
 
 def _render_generation_controls(
-    params, uploaded_files, uploaded_audio_file, uploaded_bgm_file, voice_mode
+    params, uploaded_files, uploaded_audio_file, uploaded_bgm_file, voice_mode, local_audio_path=None
 ):
     """
     校验生成依赖、提交任务，并渲染日志与成片结果。
@@ -3672,7 +3742,7 @@ def _render_generation_controls(
     has_local_materials = bool(
         uploaded_files or st.session_state.get("local_video_materials", [])
     )
-    has_custom_audio = bool(uploaded_audio_file)
+    has_custom_audio = bool(uploaded_audio_file) or bool(local_audio_path and local_audio_path.strip())
     unmet_restore_requirements = _get_unmet_restore_upload_requirements(
         restore_upload_requirements,
         video_source=params.video_source,
@@ -3816,6 +3886,15 @@ def _render_generation_controls(
             with open(custom_audio_path, "wb") as f:
                 f.write(uploaded_audio_file.getbuffer())
             params.custom_audio_file = custom_audio_path
+        elif local_audio_path and local_audio_path.strip():
+            # Use local file path directly (no upload needed)
+            local_audio_path = local_audio_path.strip()
+            if os.path.isfile(local_audio_path):
+                params.custom_audio_file = local_audio_path
+            else:
+                _remove_active_generation_task(task_id)
+                st.error(f"Audio file not found: {local_audio_path}")
+                st.stop()
 
         if uploaded_files:
             local_videos_dir = utils.storage_dir("local_videos", create=True)
@@ -3933,7 +4012,7 @@ def _render_application():
     _render_script_settings(left_panel, params)
 
     uploaded_files = _render_video_settings(middle_panel, params)
-    uploaded_audio_file, uploaded_bgm_file, voice_mode = _render_audio_settings(
+    uploaded_audio_file, uploaded_bgm_file, voice_mode, local_audio_path = _render_audio_settings(
         audio_panel, params
     )
 
@@ -3945,6 +4024,7 @@ def _render_application():
         uploaded_audio_file,
         uploaded_bgm_file,
         voice_mode,
+        local_audio_path,
     )
 
     # 生成分支在启动后台线程前已经保存过配置。这里再次保存既没有收益，还可能

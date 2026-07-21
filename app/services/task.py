@@ -16,6 +16,7 @@ from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
 from app.services import bgm as bgm_service
 from app.services import (
+    ass_subtitle,
     elevenlabs_music,
     llm,
     material,
@@ -288,16 +289,37 @@ def generate_script(task_id, params):
 def generate_terms(task_id, params, video_script):
     logger.info("\n\n## generating video terms")
     video_terms = params.video_terms
+    
+    # Check if enhanced visual search is enabled
+    enhanced_visual_search = config.app.get("enhanced_visual_search", False)
+    
     if not video_terms:
-        # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
-        # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
-        # 无法改善“后面内容的画面提前出现”的问题。
-        video_terms = llm.generate_terms(
-            video_subject=params.video_subject,
-            video_script=video_script,
-            amount=8 if params.match_materials_to_script else 5,
-            match_script_order=params.match_materials_to_script,
-        )
+        if enhanced_visual_search:
+            # Use enhanced visual search terms generator
+            logger.info("using enhanced visual search terms generator")
+            if params.match_materials_to_script:
+                # Generate per-sentence search terms for better matching
+                video_terms = llm.generate_per_sentence_search_terms(
+                    video_subject=params.video_subject,
+                    video_script=video_script,
+                )
+            else:
+                # Generate specific visual search terms
+                video_terms = llm.generate_visual_search_terms(
+                    video_subject=params.video_subject,
+                    video_script=video_script,
+                    amount=8,
+                )
+        else:
+            # 开启素材按文案顺序匹配后，关键词本身也必须按脚本叙事顺序生成；
+            # 否则后续即使顺序下载和顺序拼接，也只能复用一组全局主题词，
+            # 无法改善"后面内容的画面提前出现"的问题。
+            video_terms = llm.generate_terms(
+                video_subject=params.video_subject,
+                video_script=video_script,
+                amount=8 if params.match_materials_to_script else 5,
+                match_script_order=params.match_materials_to_script,
+            )
     else:
         if isinstance(video_terms, str):
             video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
@@ -512,16 +534,24 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     Generate subtitle for the video script.
     If subtitle generation is disabled or no subtitle maker is provided, it will return an empty string.
     Otherwise, it will generate the subtitle using the specified provider.
+    Supports both SRT and ASS (word-by-word karaoke) formats.
     Returns:
-        - subtitle_path: path to the generated subtitle file
+        - subtitle_path: path to the generated subtitle file (.srt or .ass)
     '''
     logger.info("\n\n## generating subtitle")
     if not params.subtitle_enabled:
         return ""
 
-    subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
+    # Check if word-by-word mode is enabled
+    word_by_word_enabled = getattr(params, 'word_by_word_subtitles', False)
+    
+    if word_by_word_enabled:
+        subtitle_path = path.join(utils.task_dir(task_id), "subtitle.ass")
+    else:
+        subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
+    
     subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
-    logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
+    logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}, word_by_word: {word_by_word_enabled}")
 
     if not subtitle_provider:
         logger.info("subtitle provider is empty, skip subtitle generation")
@@ -538,9 +568,20 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
         return ""
 
     if subtitle_provider == "edge":
-        voice.create_subtitle(
-            text=video_script, sub_maker=sub_maker, subtitle_file=subtitle_path
-        )
+        if word_by_word_enabled and hasattr(sub_maker, 'cues') and sub_maker.cues:
+            # Use ASS word-by-word subtitle generator
+            logger.info("generating word-by-word ASS subtitles from Edge TTS cues")
+            ass_subtitle.create_word_by_word_ass_from_edge_cues(
+                subtitle_file=subtitle_path,
+                sub_maker=sub_maker,
+                script_text=video_script,
+            )
+        else:
+            # Use standard SRT subtitle generator
+            voice.create_subtitle(
+                text=video_script, sub_maker=sub_maker, subtitle_file=subtitle_path
+            )
+        
         if not os.path.exists(subtitle_path):
             # Edge 字幕偶尔会因为时间轴与文案无法匹配而没有产出文件。这里不能
             # 自动切换到 Whisper，否则首次失败会在用户不知情的情况下下载数 GB
@@ -553,14 +594,40 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
             return ""
 
     if subtitle_provider == "whisper":
-        subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
-        logger.info("\n\n## correcting subtitle")
-        subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+        if word_by_word_enabled:
+            # For whisper, first generate SRT, then convert to ASS
+            temp_srt_path = path.join(utils.task_dir(task_id), "subtitle_temp.srt")
+            subtitle.create(audio_file=audio_file, subtitle_file=temp_srt_path)
+            logger.info("\n\n## correcting subtitle")
+            subtitle.correct(subtitle_file=temp_srt_path, video_script=video_script)
+            
+            # Convert SRT to word-by-word ASS
+            ass_subtitle.create_word_by_word_ass_from_srt(
+                subtitle_file=subtitle_path,
+                srt_file=temp_srt_path,
+                audio_duration=os.path.getsize(audio_file) / 16000,  # Rough estimate
+            )
+            
+            # Clean up temp SRT file
+            if os.path.exists(temp_srt_path):
+                os.remove(temp_srt_path)
+        else:
+            subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
+            logger.info("\n\n## correcting subtitle")
+            subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
 
-    subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
-    if not subtitle_lines:
-        logger.warning(f"subtitle file is invalid: {subtitle_path}")
-        return ""
+    # Validate the subtitle file
+    if subtitle_path.endswith('.ass'):
+        # For ASS files, just check if file exists and has content
+        if not os.path.exists(subtitle_path) or os.path.getsize(subtitle_path) == 0:
+            logger.warning(f"ASS subtitle file is invalid: {subtitle_path}")
+            return ""
+    else:
+        # For SRT files, validate content
+        subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
+        if not subtitle_lines:
+            logger.warning(f"subtitle file is invalid: {subtitle_path}")
+            return ""
 
     return subtitle_path
 

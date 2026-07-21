@@ -81,6 +81,12 @@ class VideoParams(BaseModel):
     video_clip_duration: Optional[int] = 5
     video_clip_speed: Optional[float] = 1.0
     match_materials_to_script: bool = False
+    word_by_word_subtitles: bool = True
+    enhanced_visual_search: bool = True
+    ken_burns_enabled: bool = True
+    parallax_enabled: bool = False
+    subtitle_highlight_color: str = "#6A0DAD"
+    subtitle_size_factor: float = 0.8
     video_count: Optional[int] = 1
 
     video_source: Optional[str] = "pexels"

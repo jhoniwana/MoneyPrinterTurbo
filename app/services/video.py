@@ -19,6 +19,7 @@ from moviepy import (
     CompositeVideoClip,
     ImageClip,
     TextClip,
+    VideoClip,
     VideoFileClip,
     afx,
 )
@@ -487,6 +488,455 @@ def close_clip(clip):
     del clip
     gc.collect()
 
+
+# =============================================================================
+# Ken Burns effect - zoom/pan animation for video clips
+# =============================================================================
+
+def _create_ken_burns_image_clip(image_path: str, duration: float = 3.0):
+    """
+    Create a video clip from an image with Ken Burns effect.
+    
+    Args:
+        image_path: Path to the image file
+        duration: Duration of the clip in seconds
+    
+    Returns:
+        Video clip with Ken Burns effect
+    """
+    # Load image
+    pil_image = Image.open(image_path)
+    if pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+    img_array = np.array(pil_image)
+    
+    h, w = img_array.shape[:2]
+    
+    # Choose random effect
+    effect_type = random.choice([
+        "zoom_in", "zoom_out", "pan_left", "pan_right",
+        "pan_up", "pan_down", "zoom_in_pan_right", "zoom_out_pan_left"
+    ])
+    
+    zoom_factor = 0.15
+    
+    if effect_type == "zoom_in":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * progress)
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            x = (w - new_w) // 2
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "zoom_out":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * (1 - progress))
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            x = (w - new_w) // 2
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "pan_left":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * progress)
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "pan_right":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * (1 - progress))
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "pan_up":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = h - new_h
+            x = (w - new_w) // 2
+            y = int(max_pan * (1 - progress))
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "pan_down":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = h - new_h
+            x = (w - new_w) // 2
+            y = int(max_pan * progress)
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "zoom_in_pan_right":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * progress)
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * progress * 0.5)
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    elif effect_type == "zoom_out_pan_left":
+        def make_frame(t):
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * (1 - progress))
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * (1 - progress) * 0.5)
+            y = (h - new_h) // 2
+            cropped = img_array[y:y+new_h, x:x+new_w]
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+    
+    clip = VideoClip(make_frame, duration=duration)
+    clip = clip.with_fps(30)
+    return clip
+
+
+def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
+    """
+    Create a video clip from an image with parallax 2-layer effect.
+    
+    Uses rembg to separate foreground from background, then applies
+    different motion speeds to create depth illusion.
+    
+    Args:
+        image_path: Path to the image file
+        duration: Duration of the clip in seconds
+    
+    Returns:
+        Video clip with parallax effect
+    """
+    from rembg import remove
+    
+    # Load image
+    pil_image = Image.open(image_path)
+    if pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+    
+    logger.info(f"creating parallax effect for: {image_path}")
+    
+    # Remove background
+    output = remove(pil_image)
+    
+    # Create foreground (with alpha) and background
+    foreground = output.convert('RGBA')
+    background = pil_image.copy()
+    
+    # Get arrays
+    bg_array = np.array(background)
+    fg_array = np.array(foreground)
+    
+    h, w = bg_array.shape[:2]
+    
+    # Choose random parallax effect
+    effect_type = random.choice(["zoom_in", "pan_left", "pan_right"])
+    
+    bg_speed = 0.5  # Background moves slowly
+    fg_speed = 1.5  # Foreground moves faster
+    
+    if effect_type == "zoom_in":
+        def make_frame(t):
+            progress = t / duration
+            
+            # Background: slow zoom
+            bg_zoom = 1.0 + (0.1 * progress * bg_speed)
+            bg_new_w = int(w / bg_zoom)
+            bg_new_h = int(h / bg_zoom)
+            bg_x = (w - bg_new_w) // 2
+            bg_y = (h - bg_new_h) // 2
+            bg_cropped = bg_array[bg_y:bg_y+bg_new_h, bg_x:bg_x+bg_new_w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster zoom
+            fg_zoom = 1.0 + (0.15 * progress * fg_speed)
+            fg_new_w = int(w / fg_zoom)
+            fg_new_h = int(h / fg_zoom)
+            fg_x = (w - fg_new_w) // 2
+            fg_y = (h - fg_new_h) // 2
+            fg_cropped = fg_array[fg_y:fg_y+fg_new_h, fg_x:fg_x+fg_new_w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Composite
+            alpha = fg_resized[:, :, 3:4] / 255.0
+            result = bg_resized * (1 - alpha) + fg_resized[:, :, :3] * alpha
+            return result.astype(np.uint8)
+    
+    elif effect_type == "pan_left":
+        def make_frame(t):
+            progress = t / duration
+            
+            # Background: slow pan left
+            bg_offset = int(30 * progress * bg_speed)
+            bg_shifted = np.roll(bg_array, -bg_offset, axis=1)
+            bg_cropped = bg_shifted[:, :w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster pan left
+            fg_offset = int(30 * progress * fg_speed)
+            fg_shifted = np.roll(fg_array[:, :, :3], -fg_offset, axis=1)
+            fg_cropped = fg_shifted[:, :w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Get alpha mask resized
+            alpha = fg_array[:, :, 3:4] / 255.0
+            alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
+            
+            # Composite
+            result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
+            return result.astype(np.uint8)
+    
+    elif effect_type == "pan_right":
+        def make_frame(t):
+            progress = t / duration
+            
+            # Background: slow pan right
+            bg_offset = int(30 * progress * bg_speed)
+            bg_shifted = np.roll(bg_array, bg_offset, axis=1)
+            bg_cropped = bg_shifted[:, :w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster pan right
+            fg_offset = int(30 * progress * fg_speed)
+            fg_shifted = np.roll(fg_array[:, :, :3], fg_offset, axis=1)
+            fg_cropped = fg_shifted[:, :w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Get alpha mask resized
+            alpha = fg_array[:, :, 3:4] / 255.0
+            alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
+            
+            # Composite
+            result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
+            return result.astype(np.uint8)
+    
+    clip = VideoClip(make_frame, duration=duration)
+    clip = clip.with_fps(30)
+    return clip
+
+
+def _apply_ken_burns(clip, effect_type=None):
+    """
+    Apply Ken Burns (zoom/pan) effect to a video clip.
+    
+    Args:
+        clip: MoviePy video clip
+        effect_type: Specific effect to apply, or None for random
+    
+    Returns:
+        Clip with Ken Burns effect applied
+    """
+    if effect_type is None:
+        effect_type = random.choice([
+            "zoom_in", "zoom_out", "pan_left", "pan_right",
+            "pan_up", "pan_down", "zoom_in_pan_right", "zoom_out_pan_left"
+        ])
+    
+    w, h = clip.size
+    duration = clip.duration
+    
+    # Ken Burns parameters
+    zoom_factor = 0.15  # How much to zoom (15%)
+    
+    if effect_type == "zoom_in":
+        # Zoom in slowly
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * progress)
+            # Calculate crop
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            x = (w - new_w) // 2
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            # Resize back to original size
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "zoom_out":
+        # Zoom out slowly
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * (1 - progress))
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            x = (w - new_w) // 2
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "pan_left":
+        # Pan from right to left
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            # Zoom slightly to allow panning
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            # Pan across
+            max_pan = w - new_w
+            x = int(max_pan * progress)
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "pan_right":
+        # Pan from left to right
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * (1 - progress))
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "pan_up":
+        # Pan from bottom to top
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = h - new_h
+            x = (w - new_w) // 2
+            y = int(max_pan * (1 - progress))
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "pan_down":
+        # Pan from top to bottom
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.1
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = h - new_h
+            x = (w - new_w) // 2
+            y = int(max_pan * progress)
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "zoom_in_pan_right":
+        # Zoom in while panning right
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * progress)
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * progress * 0.5)
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "zoom_out_pan_left":
+        # Zoom out while panning left
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            zoom = 1.0 + (zoom_factor * (1 - progress))
+            new_w = int(w / zoom)
+            new_h = int(h / zoom)
+            max_pan = w - new_w
+            x = int(max_pan * (1 - progress) * 0.5)
+            y = (h - new_h) // 2
+            cropped = frame[y:y+new_h, x:x+new_w]
+            from PIL import Image
+            img = Image.fromarray(cropped)
+            img = img.resize((w, h), Image.LANCZOS)
+            return np.array(img)
+        
+        clip = clip.transform(make_frame)
+    
+    return clip
+
+
 def delete_files(files: List[str] | str):
     if isinstance(files, str):
         files = [files]
@@ -506,6 +956,161 @@ def delete_files(files: List[str] | str):
             # 权限、只读文件系统或磁盘异常会留下真实临时文件，保留 warning
             # 便于根据具体路径和系统错误定位环境问题。
             logger.warning(f"failed to delete temporary file {file}: {str(e)}")
+
+
+# =============================================================================
+# Parallax 2-layer effect - foreground moves faster than background
+# =============================================================================
+
+def _apply_parallax_effect(clip, effect_type=None):
+    """
+    Apply parallax 2-layer effect to a video clip.
+    
+    Separates foreground from background using rembg, then applies
+    different motion speeds to create depth illusion.
+    
+    Args:
+        clip: MoviePy video clip
+        effect_type: Specific effect, or None for random
+    
+    Returns:
+        Clip with parallax effect, or original clip if rembg fails
+    """
+    try:
+        from rembg import remove
+        from PIL import Image
+        import io
+    except ImportError:
+        logger.warning("rembg not available, skipping parallax effect")
+        return clip
+    
+    if effect_type is None:
+        effect_type = random.choice([
+            "parallax_zoom_in", "parallax_pan_left", "parallax_pan_right"
+        ])
+    
+    w, h = clip.size
+    duration = clip.duration
+    
+    # Extract first frame for background removal
+    first_frame = clip.get_frame(0)
+    
+    try:
+        # Remove background using rembg
+        pil_image = Image.fromarray(first_frame)
+        # rembg expects RGB, ensure we have it
+        if pil_image.mode != 'RGB':
+            pil_image = pil_image.convert('RGB')
+        
+        # Process with rembg
+        output = remove(pil_image)
+        
+        # Create foreground (with alpha) and background (without subject)
+        foreground = output.convert('RGBA')
+        background = pil_image.copy()
+        
+        # Create a mask from the alpha channel
+        mask = foreground.split()[3]
+        
+        # Fill background where subject was (inpainting simple approach: blur)
+        # For simplicity, we'll use the original background
+        bg_array = np.array(pil_image)
+        fg_array = np.array(foreground)
+        mask_array = np.array(mask) / 255.0  # Normalize to 0-1
+        
+        # Create layers
+        # Foreground: subject with transparent background
+        # Background: original image (or blurred version for depth)
+        
+    except Exception as e:
+        logger.warning(f"rembg failed, falling back to Ken Burns: {str(e)}")
+        return _apply_ken_burns(clip, effect_type="zoom_in")
+    
+    # Apply parallax motion
+    bg_speed = 0.5  # Background moves slowly
+    fg_speed = 1.5  # Foreground moves faster
+    
+    if effect_type == "parallax_zoom_in":
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            
+            # Background: slow zoom
+            bg_zoom = 1.0 + (0.1 * progress * bg_speed)
+            bg_new_w = int(w / bg_zoom)
+            bg_new_h = int(h / bg_zoom)
+            bg_x = (w - bg_new_w) // 2
+            bg_y = (h - bg_new_h) // 2
+            bg_cropped = bg_array[bg_y:bg_y+bg_new_h, bg_x:bg_x+bg_new_w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster zoom
+            fg_zoom = 1.0 + (0.15 * progress * fg_speed)
+            fg_new_w = int(w / fg_zoom)
+            fg_new_h = int(h / fg_zoom)
+            fg_x = (w - fg_new_w) // 2
+            fg_y = (h - fg_new_h) // 2
+            fg_cropped = fg_array[fg_y:fg_y+fg_new_h, fg_x:fg_x+fg_new_w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Composite: background first, then foreground on top
+            alpha = fg_resized[:, :, 3:4] / 255.0
+            result = bg_resized * (1 - alpha) + fg_resized[:, :, :3] * alpha
+            return result.astype(np.uint8)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "parallax_pan_left":
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            
+            # Background: slow pan left
+            bg_offset = int(20 * progress * bg_speed)
+            bg_shifted = np.roll(bg_array, -bg_offset, axis=1)
+            bg_cropped = bg_shifted[:, :w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster pan left
+            fg_offset = int(20 * progress * fg_speed)
+            fg_shifted = np.roll(fg_array[:, :, :3], -fg_offset, axis=1)
+            fg_cropped = fg_shifted[:, :w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Composite
+            alpha = fg_array[:, :, 3:4] / 255.0
+            alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
+            result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
+            return result.astype(np.uint8)
+        
+        clip = clip.transform(make_frame)
+        
+    elif effect_type == "parallax_pan_right":
+        def make_frame(get_frame, t):
+            frame = get_frame(t)
+            progress = t / duration
+            
+            # Background: slow pan right
+            bg_offset = int(20 * progress * bg_speed)
+            bg_shifted = np.roll(bg_array, bg_offset, axis=1)
+            bg_cropped = bg_shifted[:, :w]
+            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Foreground: faster pan right
+            fg_offset = int(20 * progress * fg_speed)
+            fg_shifted = np.roll(fg_array[:, :, :3], fg_offset, axis=1)
+            fg_cropped = fg_shifted[:, :w]
+            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            
+            # Composite
+            alpha = fg_array[:, :, 3:4] / 255.0
+            alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
+            result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
+            return result.astype(np.uint8)
+        
+        clip = clip.transform(make_frame)
+    
+    return clip
 
 
 def get_bgm_file(bgm_type: str = "random", bgm_file: str = ""):
@@ -689,6 +1294,21 @@ def combine_videos(
                 ]
                 shuffle_transition = random.choice(transition_funcs)
                 clip = shuffle_transition(clip)
+
+            # Apply Ken Burns or Parallax effect to add life to clips
+            ken_burns_enabled = config.app.get("ken_burns_enabled", True)
+            parallax_enabled = config.app.get("parallax_enabled", False)
+            
+            if parallax_enabled:
+                # Try parallax first, fall back to Ken Burns if it fails
+                try:
+                    clip = _apply_parallax_effect(clip)
+                except Exception as e:
+                    logger.warning(f"parallax failed, using Ken Burns: {str(e)}")
+                    if ken_burns_enabled:
+                        clip = _apply_ken_burns(clip)
+            elif ken_burns_enabled:
+                clip = _apply_ken_burns(clip)
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)
@@ -968,6 +1588,59 @@ def subtitle_font_supports_text(font_path: str, text: str) -> bool:
     return _subtitle_font_supports_sample(font_path, sample)
 
 
+def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_file: str):
+    """
+    Apply ASS subtitles to a video using FFmpeg's ass filter.
+    
+    This function uses FFmpeg's native ASS subtitle filter to render
+    karaoke-style word-by-word subtitles with proper animation.
+    
+    Args:
+        input_video: Path to input video file
+        output_video: Path to output video file
+        ass_file: Path to ASS subtitle file
+    
+    Raises:
+        RuntimeError: If FFmpeg command fails
+    """
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+    
+    # Escape the ASS file path for FFmpeg filter
+    # On Windows, backslashes need to be escaped
+    escaped_ass_path = ass_file.replace("\\", "/").replace(":", "\\:")
+    
+    # Build FFmpeg command
+    command = [
+        ffmpeg_bin,
+        "-y",  # Overwrite output file
+        "-i", input_video,
+        "-vf", f"ass='{escaped_ass_path}'",
+        "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "23",
+        "-c:a", "copy",  # Copy audio without re-encoding
+        "-movflags", "+faststart",
+        output_video,
+    ]
+    
+    logger.info(f"applying ASS subtitles with FFmpeg: {ass_file}")
+    logger.debug(f"FFmpeg command: {' '.join(command)}")
+    
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    
+    if result.returncode != 0:
+        error_msg = (result.stderr or result.stdout or "").strip()
+        logger.error(f"FFmpeg ASS subtitle failed: {error_msg}")
+        raise RuntimeError(f"FFmpeg failed to apply ASS subtitles: {error_msg}")
+    
+    logger.success(f"ASS subtitles applied: {output_video}")
+
+
 def generate_video(
     video_path: str,
     audio_path: str,
@@ -1186,19 +1859,28 @@ def generate_video(
             )
 
         if subtitle_path and os.path.exists(subtitle_path):
-            sub = clip_stack.enter_context(
-                SubtitlesClip(
-                    subtitles=subtitle_path,
-                    encoding="utf-8",
-                    make_textclip=make_textclip,
+            # Check if subtitle file is ASS format
+            is_ass = subtitle_path.lower().endswith('.ass')
+            
+            if is_ass:
+                # ASS subtitles are applied later in the final write step via FFmpeg's ass filter
+                # Skip MoviePy subtitle processing for ASS files
+                logger.info(f"ASS subtitle detected, will apply via FFmpeg: {subtitle_path}")
+            else:
+                # Use existing MoviePy approach for SRT subtitles
+                sub = clip_stack.enter_context(
+                    SubtitlesClip(
+                        subtitles=subtitle_path,
+                        encoding="utf-8",
+                        make_textclip=make_textclip,
+                    )
                 )
-            )
-            text_clips = []
-            for item in sub.subtitles:
-                clip = create_text_clip(subtitle_item=item)
-                text_clips.append(clip)
-            video_clip = CompositeVideoClip([video_clip, *text_clips])
-            clip_stack.callback(video_clip.close)
+                text_clips = []
+                for item in sub.subtitles:
+                    clip = create_text_clip(subtitle_item=item)
+                    text_clips.append(clip)
+                video_clip = CompositeVideoClip([video_clip, *text_clips])
+                clip_stack.callback(video_clip.close)
 
         bgm_enabled = bgm_service.should_use_bgm(
             params.bgm_type, params.bgm_volume
@@ -1249,21 +1931,58 @@ def generate_video(
 
         final_video_clip = video_clip.with_audio(audio_clip)
         clip_stack.callback(final_video_clip.close)
-        # 显式沿用输入音频的采样率；如果取不到，再回退 MoviePy 默认的 44100Hz。
-        # 这样可以减少不同环境，尤其 Docker 中再次重采样带来的音质波动。
-        output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
-        _write_videofile_with_codec_fallback(
-            final_video_clip,
-            output_file=output_file,
-            codec=_get_configured_video_codec(),
-            audio_codec=audio_codec,
-            audio_fps=output_audio_fps,
-            audio_bitrate=audio_bitrate,
-            temp_audiofile_path=_get_temp_audio_dir(output_dir),
-            threads=params.n_threads or 2,
-            logger=None,
-            fps=fps,
-        )
+        
+        # Check if we need to apply ASS subtitles via FFmpeg post-processing
+        is_ass_subtitle = subtitle_path and subtitle_path.lower().endswith('.ass')
+        
+        if is_ass_subtitle:
+            # For ASS subtitles, write video first without subtitles, then apply ASS via FFmpeg
+            temp_output = output_file + ".temp.mp4"
+            logger.info(f"writing video without subtitles first, then applying ASS: {subtitle_path}")
+            
+            # Write video without subtitles
+            output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
+            _write_videofile_with_codec_fallback(
+                final_video_clip,
+                output_file=temp_output,
+                codec=_get_configured_video_codec(),
+                audio_codec=audio_codec,
+                audio_fps=output_audio_fps,
+                audio_bitrate=audio_bitrate,
+                temp_audiofile_path=_get_temp_audio_dir(output_dir),
+                threads=params.n_threads or 2,
+                logger=None,
+                fps=fps,
+            )
+            
+            # Apply ASS subtitles using FFmpeg's ass filter
+            try:
+                _apply_ass_subtitles_with_ffmpeg(temp_output, output_file, subtitle_path)
+                # Clean up temp file
+                if os.path.exists(temp_output):
+                    os.remove(temp_output)
+                logger.success(f"ASS subtitles applied successfully: {output_file}")
+            except Exception as e:
+                logger.error(f"failed to apply ASS subtitles: {str(e)}")
+                # Fall back to video without subtitles
+                if os.path.exists(temp_output):
+                    os.rename(temp_output, output_file)
+        else:
+            # Standard SRT subtitle handling
+            output_audio_fps = int(getattr(audio_clip, "fps", 0) or 44100)
+            _write_videofile_with_codec_fallback(
+                final_video_clip,
+                output_file=output_file,
+                codec=_get_configured_video_codec(),
+                audio_codec=audio_codec,
+                audio_fps=output_audio_fps,
+                audio_bitrate=audio_bitrate,
+                temp_audiofile_path=_get_temp_audio_dir(output_dir),
+                threads=params.n_threads or 2,
+                logger=None,
+                fps=fps,
+            )
+        
         return bgm_mix_succeeded
 
 
@@ -1331,30 +2050,25 @@ def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
                 logger.info(f"processing image: {material_source_path}")
                 # 探测尺寸时已经打开过一次素材，这里先释放探测句柄，再重新创建用于导出的图片 clip。
                 close_clip(clip)
-                # Create an image clip and set its duration to 3 seconds
-                clip = (
-                    ImageClip(material_source_path)
-                    .with_duration(clip_duration)
-                    .with_position("center")
-                )
-                # Apply a zoom effect using the resize method.
-                # A lambda function is used to make the zoom effect dynamic over time.
-                # The zoom effect starts from the original size and gradually scales up to 120%.
-                # t represents the current time, and clip.duration is the total duration of the clip (3 seconds).
-                # Note: 1 represents 100% size, so 1.2 represents 120% size.
-                zoom_clip = clip.resized(
-                    lambda t: 1 + (clip_duration * 0.03) * (t / clip.duration)
-                )
-
-                # Optionally, create a composite video clip containing the zoomed clip.
-                # This is useful when you want to add other elements to the video.
-                final_clip = CompositeVideoClip([zoom_clip])
-
+                
+                # Check if parallax effect is enabled
+                parallax_enabled = config.app.get("parallax_enabled", False)
+                
+                if parallax_enabled:
+                    # Apply parallax effect for images
+                    try:
+                        clip = _create_parallax_image_clip(material_source_path, clip_duration)
+                    except Exception as e:
+                        logger.warning(f"parallax failed for image, using Ken Burns: {str(e)}")
+                        clip = _create_ken_burns_image_clip(material_source_path, clip_duration)
+                else:
+                    # Apply Ken Burns effect for images
+                    clip = _create_ken_burns_image_clip(material_source_path, clip_duration)
+                
                 # Output the video to a file.
                 video_file = f"{material_source_path}.mp4"
-                final_clip.write_videofile(video_file, fps=30, logger=None)
+                clip.write_videofile(video_file, fps=30, logger=None)
                 close_clip(clip)
-                close_clip(final_clip)
                 material.url = video_file
                 logger.success(f"image processed: {video_file}")
             else:
