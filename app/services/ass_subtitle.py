@@ -1,12 +1,15 @@
 """
-TikTok-style ASS subtitle generator.
+TikTok/CapCut-style ASS subtitle generator.
 
-Shows 3-4 words at a time with a dark background box (BorderStyle 4).
-The current word is highlighted in bright yellow.
+The "Hormozi style":
+- Bold font (Anton/Bebas Neue), white text
+- Semi-transparent black background box (BorderStyle 4)
+- Current word highlighted in yellow (#FFFF00)
+- 3-4 words per chunk, centered at bottom
+- Large font size for mobile readability
 """
 
 import os
-import re
 from typing import List, Tuple
 from xml.sax.saxutils import unescape
 
@@ -14,6 +17,9 @@ from loguru import logger
 
 from app.config import config
 from app.utils import utils
+
+CHUNK_SIZE = 4
+OVERLAP = 0.015
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
@@ -33,30 +39,35 @@ def _hex_to_ass(hex_color: str) -> str:
     return hex_color
 
 
-CHUNK_SIZE = 4
-OVERLAP = 0.015
-
-
 def create_word_by_word_ass(
     subtitle_file: str,
     sentences: List[Tuple[str, float, float]],
     word_boundaries: List[Tuple[str, float, float]],
-    font_name: str = "Noto Sans Bold",
+    font_name: str = "Anton",
     font_size: int = 120,
     font_color: str = "#FFFFFF",
-    highlight_color: str = "#FFDD00",
+    highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",
     stroke_width: int = 4,
     video_width: int = 1080,
     video_height: int = 1920,
     chunk_size: int = CHUNK_SIZE,
 ) -> str:
+    """
+    Generate TikTok/Hormozi-style ASS subtitle.
+
+    Style: White bold text on semi-transparent black box.
+    Current word turns yellow. 3-4 words per chunk.
+    """
     logger.info(f"generating TikTok-style ASS subtitle: {subtitle_file}")
 
     primary = _hex_to_ass(font_color)
-    outline = _hex_to_ass(stroke_color)
-    hl_ass = _hex_to_ass(highlight_color)
+    hl = _hex_to_ass(highlight_color)
 
+    # BorderStyle 4 = opaque box behind text
+    # BackColour = &H80000000 (black at 50% opacity)
+    # Alignment 2 = bottom center
+    # MarginV 150 = fixed distance from bottom
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {video_width}
@@ -67,7 +78,7 @@ YCbCr Matrix: None
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,1,0,4,0,0,2,30,30,120,1
+Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,4,0,0,2,50,50,150,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -111,11 +122,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 display_start = prev_end - OVERLAP if prev_end is not None else w_start
                 display_start = max(display_start, chunk_start_time)
 
-                parts = [f"{{\\q2}}"]
+                parts = []
                 for j, (w, _, _) in enumerate(chunk):
                     if j == i:
-                        parts.append(f"{{\\1c{hl_ass}\\b1}}{w}{{\\b0}}")
+                        # Current word: yellow (the highlight)
+                        parts.append(f"{{\\1c{hl}}}{w}")
                     else:
+                        # Other words: white (normal)
                         parts.append(w)
 
                 ass_text = " ".join(parts)
@@ -138,12 +151,12 @@ def create_word_by_word_ass_from_edge_cues(
     sub_maker,
     script_text: str,
     srt_file: str = None,
-    font_name: str = "Noto Sans Bold",
+    font_name: str = "Anton",
     font_size: int = 120,
     font_color: str = "#FFFFFF",
-    highlight_color: str = "#FFDD00",
+    highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",
-    stroke_width: int = 3,
+    stroke_width: int = 4,
     video_width: int = 1080,
     video_height: int = 1920,
     chunk_size: int = CHUNK_SIZE,
@@ -210,8 +223,15 @@ def create_word_by_word_ass_from_edge_cues(
     try:
         result = subprocess.run(["fc-list", f":family={font_name}"], capture_output=True, text=True, timeout=5)
         if not result.stdout.strip():
-            logger.warning(f"font '{font_name}' not found, using Noto Sans Bold")
-            font_name = "Noto Sans Bold"
+            # Try TikTok-style fonts first, then fallbacks
+            for fallback in ["Anton", "Bebas Neue", "Oswald", "Noto Sans Bold"]:
+                result = subprocess.run(["fc-list", f":family={fallback}"], capture_output=True, text=True, timeout=5)
+                if result.stdout.strip():
+                    font_name = fallback
+                    logger.info(f"using font: {font_name}")
+                    break
+            else:
+                font_name = "Noto Sans Bold"
     except Exception:
         font_name = "Noto Sans Bold"
 
@@ -235,12 +255,12 @@ def create_word_by_word_ass_from_srt(
     subtitle_file: str,
     srt_file: str,
     audio_duration: float,
-    font_name: str = "Noto Sans Bold",
+    font_name: str = "Anton",
     font_size: int = 120,
     font_color: str = "#FFFFFF",
-    highlight_color: str = "#FFDD00",
+    highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",
-    stroke_width: int = 3,
+    stroke_width: int = 4,
     video_width: int = 1080,
     video_height: int = 1920,
     chunk_size: int = CHUNK_SIZE,
