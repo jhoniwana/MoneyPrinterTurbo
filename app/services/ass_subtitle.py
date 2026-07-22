@@ -86,6 +86,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
     dialogue_lines = []
 
+    # Calculate fixed position for all lines
+    # For Alignment 2 (bottom center), \pos(x,y) places the bottom-center of text at (x,y)
+    pos_x = video_width // 2  # Center horizontally
+    pos_y = video_height - 150  # 150px from bottom (MarginV)
+
     for sentence_text, sent_start, sent_end in sentences:
         clean_text = sentence_text.strip()
         if not clean_text:
@@ -132,8 +137,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                         parts.append(w)
 
                 ass_text = " ".join(parts)
+                # \\pos forces fixed position — prevents subtitle jumping up/down
                 dialogue_lines.append(
-                    f"Dialogue: 0,{_seconds_to_ass_time(display_start)},{_seconds_to_ass_time(w_end)},Default,,0,0,0,,{ass_text}"
+                    f"Dialogue: 0,{_seconds_to_ass_time(display_start)},{_seconds_to_ass_time(w_end)},Default,,0,0,0,,{{\\pos({pos_x},{pos_y})}}{ass_text}"
                 )
                 prev_end = w_end
 
