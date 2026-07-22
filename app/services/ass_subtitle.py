@@ -1,12 +1,11 @@
 """
 TikTok/CapCut-style ASS subtitle generator.
 
-The "Hormozi style":
-- Bold font (Anton/Bebas Neue), white text
-- Semi-transparent black background box (BorderStyle 4)
-- Current word highlighted in yellow (#FFFF00)
-- 3-4 words per chunk, centered at bottom
-- Large font size for mobile readability
+Expert-optimized for stable positioning:
+- PlayResX: 1920 (wider layout region prevents text wrapping)
+- BorderStyle 4 (opaque box), Anton font, yellow word highlight
+- \\q2 + \\pos on every dialogue line (belt-and-suspenders no-wrap + fixed position)
+- \\fad(30,30) for smooth transitions between lines
 """
 
 import os
@@ -44,7 +43,7 @@ def create_word_by_word_ass(
     sentences: List[Tuple[str, float, float]],
     word_boundaries: List[Tuple[str, float, float]],
     font_name: str = "Anton",
-    font_size: int = 120,
+    font_size: int = 110,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",
@@ -56,40 +55,44 @@ def create_word_by_word_ass(
     """
     Generate TikTok/Hormozi-style ASS subtitle.
 
-    Style: White bold text on semi-transparent black box.
-    Current word turns yellow. 3-4 words per chunk.
+    Expert-optimized:
+    - PlayResX set to 1920 (wider than video) to prevent text wrapping
+    - \\q2 on every line forces no-wrap
+    - \\pos(960,1770) locks position for Alignment 2 + MarginV 150
+    - \\fad(30,30) for smooth transitions
     """
     logger.info(f"generating TikTok-style ASS subtitle: {subtitle_file}")
 
     primary = _hex_to_ass(font_color)
     hl = _hex_to_ass(highlight_color)
 
-    # BorderStyle 4 = opaque box behind text
-    # BackColour = &H80000000 (black at 50% opacity)
-    # Alignment 2 = bottom center
-    # MarginV 150 = fixed distance from bottom
+    # PlayResX 1920 > video 1080 — libass scales down, but layout region is wider
+    # This prevents text from wrapping when 4 words exceed 980px
+    script_res_x = 1920
+    script_res_y = video_height
+
+    # X center with PlayResX=1920: 1920/2 = 960
+    # Y with MarginV=150: 1920 - 150 = 1770
+    pos_x = script_res_x // 2
+    pos_y = script_res_y - 150
+
     header = f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: {video_width}
-PlayResY: {video_height}
+PlayResX: {script_res_x}
+PlayResY: {script_res_y}
 WrapStyle: 2
 ScaledBorderAndShadow: yes
-YCbCr Matrix: None
+YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,4,0,0,2,50,50,150,1
+Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,4,0,0,2,80,80,150,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
 
     dialogue_lines = []
-
-    # Calculate fixed position for all lines
-    # For Alignment 2 (bottom center), \pos(x,y) places the bottom-center of text at (x,y)
-    pos_x = video_width // 2  # Center horizontally
-    pos_y = video_height - 150  # 150px from bottom (MarginV)
 
     for sentence_text, sent_start, sent_end in sentences:
         clean_text = sentence_text.strip()
@@ -130,16 +133,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 parts = []
                 for j, (w, _, _) in enumerate(chunk):
                     if j == i:
-                        # Current word: yellow (the highlight)
                         parts.append(f"{{\\1c{hl}}}{w}")
                     else:
-                        # Other words: white (normal)
                         parts.append(w)
 
                 ass_text = " ".join(parts)
-                # \\pos forces fixed position — prevents subtitle jumping up/down
+                # \\q2 = no-wrap, \\pos = fixed position, \\fad = smooth transitions
                 dialogue_lines.append(
-                    f"Dialogue: 0,{_seconds_to_ass_time(display_start)},{_seconds_to_ass_time(w_end)},Default,,0,0,0,,{{\\pos({pos_x},{pos_y})}}{ass_text}"
+                    f"Dialogue: 0,{_seconds_to_ass_time(display_start)},{_seconds_to_ass_time(w_end)},Default,,0,0,0,,{{\\q2\\pos({pos_x},{pos_y})\\fad(30,30)}}{ass_text}"
                 )
                 prev_end = w_end
 
@@ -158,7 +159,7 @@ def create_word_by_word_ass_from_edge_cues(
     script_text: str,
     srt_file: str = None,
     font_name: str = "Anton",
-    font_size: int = 120,
+    font_size: int = 110,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",
@@ -229,7 +230,6 @@ def create_word_by_word_ass_from_edge_cues(
     try:
         result = subprocess.run(["fc-list", f":family={font_name}"], capture_output=True, text=True, timeout=5)
         if not result.stdout.strip():
-            # Try TikTok-style fonts first, then fallbacks
             for fallback in ["Anton", "Bebas Neue", "Oswald", "Noto Sans Bold"]:
                 result = subprocess.run(["fc-list", f":family={fallback}"], capture_output=True, text=True, timeout=5)
                 if result.stdout.strip():
@@ -262,7 +262,7 @@ def create_word_by_word_ass_from_srt(
     srt_file: str,
     audio_duration: float,
     font_name: str = "Anton",
-    font_size: int = 120,
+    font_size: int = 110,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFFF00",
     stroke_color: str = "#000000",

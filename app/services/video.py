@@ -1,4 +1,5 @@
 import itertools
+import hashlib
 import io
 import os
 import random
@@ -490,148 +491,163 @@ def close_clip(clip):
 
 
 # =============================================================================
-# Ken Burns effect - zoom/pan animation for video clips
+# rembg caching + optimized background removal
+# =============================================================================
+
+_REMBG_SESSION = None
+_REMBG_CACHE_DIR = os.path.join(tempfile.gettempdir(), "mpt_rembg_cache")
+
+
+def _get_rembg_session():
+    """Lazy-init rembg session with fastest model (u2netp) and optimized ONNX."""
+    global _REMBG_SESSION
+    if _REMBG_SESSION is not None:
+        return _REMBG_SESSION
+
+    try:
+        import onnxruntime as ort
+        from rembg import new_session
+
+        sess_opts = ort.SessionOptions()
+        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        sess_opts.intra_op_num_threads = 2
+        sess_opts.inter_op_num_threads = 2
+        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+
+        _REMBG_SESSION = new_session("u2netp", providers=["CPUExecutionProvider"])
+        logger.info("rembg session initialized with u2netp model")
+    except Exception as e:
+        logger.warning(f"failed to init rembg session: {e}")
+        _REMBG_SESSION = None
+
+    return _REMBG_SESSION
+
+
+def _cached_rembg(image_path: str):
+    """
+    Remove background with caching. Same image = instant cache hit.
+    Downsizes to 640px for model inference (u2netp input is 320px anyway).
+    """
+    os.makedirs(_REMBG_CACHE_DIR, exist_ok=True)
+
+    # Content hash for cache key
+    with open(image_path, "rb") as f:
+        content_hash = hashlib.md5(f.read()).hexdigest()
+    cache_path = os.path.join(_REMBG_CACHE_DIR, f"{content_hash}.png")
+
+    if os.path.exists(cache_path):
+        from PIL import Image as PILImage
+        logger.debug(f"rembg cache hit: {os.path.basename(image_path)}")
+        return PILImage.open(cache_path).convert("RGBA")
+
+    from PIL import Image as PILImage
+    from rembg import remove
+
+    session = _get_rembg_session()
+    img = PILImage.open(image_path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    # Downscale for faster inference (model input is 320px anyway)
+    orig_size = img.size
+    max_dim = 640
+    if max(img.size) > max_dim:
+        ratio = max_dim / max(img.size)
+        small = img.resize((int(img.width * ratio), int(img.height * ratio)), PILImage.LANCZOS)
+    else:
+        small = img
+
+    if session is not None:
+        result = remove(small, session=session)
+    else:
+        result = remove(small)
+
+    # Resize mask back to original size and composite
+    if result.size != orig_size:
+        alpha = result.split()[3]
+        alpha = alpha.resize(orig_size, PILImage.LANCZOS)
+        result = img.convert("RGBA")
+        result.putalpha(alpha)
+
+    result.save(cache_path)
+    logger.debug(f"rembg cached: {os.path.basename(image_path)} -> {cache_path}")
+    return result
+
+
+# =============================================================================
+# Ken Burns effect - zoom/pan animation for video clips (FFmpeg zoompan)
 # =============================================================================
 
 def _create_ken_burns_image_clip(image_path: str, duration: float = 3.0):
     """
-    Create a video clip from an image with Ken Burns effect.
-    
+    Create a video clip from an image with Ken Burns effect using FFmpeg zoompan.
+
+    Much faster than PIL-based approach — zoompan runs in C (FFmpeg).
+    Oversamples to 2x then downscales for Lanczos-quality smoothness.
+
     Args:
         image_path: Path to the image file
         duration: Duration of the clip in seconds
-    
+
     Returns:
         Video clip with Ken Burns effect
     """
-    # Load image
-    pil_image = Image.open(image_path)
-    if pil_image.mode != 'RGB':
-        pil_image = pil_image.convert('RGB')
-    img_array = np.array(pil_image)
-    
-    h, w = img_array.shape[:2]
-    
-    # Choose random effect
+    fps = 30
+    num_frames = int(duration * fps)
+    output_w, output_h = 1080, 1920
+
     effect_type = random.choice([
         "zoom_in", "zoom_out", "pan_left", "pan_right",
-        "pan_up", "pan_down", "zoom_in_pan_right", "zoom_out_pan_left"
+        "pan_up", "pan_down",
     ])
-    
-    zoom_factor = 0.15
-    
-    if effect_type == "zoom_in":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.0 + (zoom_factor * progress)
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            x = (w - new_w) // 2
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "zoom_out":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.0 + (zoom_factor * (1 - progress))
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            x = (w - new_w) // 2
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "pan_left":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.1
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = w - new_w
-            x = int(max_pan * progress)
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "pan_right":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.1
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = w - new_w
-            x = int(max_pan * (1 - progress))
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "pan_up":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.1
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = h - new_h
-            x = (w - new_w) // 2
-            y = int(max_pan * (1 - progress))
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "pan_down":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.1
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = h - new_h
-            x = (w - new_w) // 2
-            y = int(max_pan * progress)
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "zoom_in_pan_right":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.0 + (zoom_factor * progress)
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = w - new_w
-            x = int(max_pan * progress * 0.5)
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    elif effect_type == "zoom_out_pan_left":
-        def make_frame(t):
-            progress = t / duration
-            zoom = 1.0 + (zoom_factor * (1 - progress))
-            new_w = int(w / zoom)
-            new_h = int(h / zoom)
-            max_pan = w - new_w
-            x = int(max_pan * (1 - progress) * 0.5)
-            y = (h - new_h) // 2
-            cropped = img_array[y:y+new_h, x:x+new_w]
-            img = Image.fromarray(cropped)
-            img = img.resize((w, h), Image.LANCZOS)
-            return np.array(img)
-    
-    clip = VideoClip(make_frame, duration=duration)
-    clip = clip.with_fps(30)
+
+    # zoompan expressions for each effect
+    # d=num_frames, s=output_size, fps=fps
+    # Using {d} placeholder for f-string replacement
+    zoom_expr = {
+        "zoom_in":    "z='min(zoom+0.0015,1.15)'",
+        "zoom_out":   "z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0015))'",
+        "pan_left":   "z='1.1':x='iw/2-(iw/2)*on/{d}':y='ih/2-(ih/2)/2'",
+        "pan_right":  "z='1.1':x='iw/2-(iw/2)*(1-on/{d})':y='ih/2-(ih/2)/2'",
+        "pan_up":     "z='1.1':x='iw/2-(iw/2)/2':y='ih/2-(ih/2)*(1-on/{d})'",
+        "pan_down":   "z='1.1':x='iw/2-(iw/2)/2':y='ih/2-(ih/2)*on/{d}'",
+    }
+
+    zoom_params = zoom_expr.get(effect_type, zoom_expr["zoom_in"]).replace("{d}", str(num_frames))
+
+    ffmpeg_bin = utils.get_ffmpeg_binary()
+    output_file = f"{image_path}.kb.mp4"
+
+    # Build zoompan filter: oversample 2x then downscale for quality
+    filter_complex = (
+        f"scale=2160:3840:flags=lanczos,"
+        f"zoompan={zoom_params}:d={num_frames}:s={output_w}x{output_h}:fps={fps},"
+        f"format=yuv420p"
+    )
+
+    command = [
+        ffmpeg_bin, "-y",
+        "-loop", "1",
+        "-i", image_path,
+        "-filter_complex", filter_complex,
+        "-t", str(duration),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-movflags", "+faststart",
+        output_file,
+    ]
+
+    logger.debug(f"Ken Burns zoompan: {effect_type}, {num_frames} frames, {duration}s")
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+
+    if result.returncode != 0:
+        logger.warning(f"zoompan failed ({effect_type}), falling back to simple image: {result.stderr[:200]}")
+        # Fallback: static image clip
+        clip, _ = _open_image_clip_with_fallback(image_path)
+        clip = clip.resized(new_size=(output_w, output_h))
+        clip = clip.with_duration(duration)
+        return clip
+
+    clip = _open_video_clip_quietly(output_file)
     return clip
 
 
@@ -639,8 +655,8 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
     """
     Create a video clip from an image with parallax 2-layer effect.
     
-    Uses rembg to separate foreground from background, then applies
-    different motion speeds to create depth illusion.
+    Uses cached rembg (u2netp model) to separate foreground from background,
+    then applies different motion speeds to create depth illusion.
     
     Args:
         image_path: Path to the image file
@@ -649,7 +665,7 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
     Returns:
         Video clip with parallax effect
     """
-    from rembg import remove
+    from PIL import Image
     
     # Load image
     pil_image = Image.open(image_path)
@@ -658,8 +674,8 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
     
     logger.info(f"creating parallax effect for: {image_path}")
     
-    # Remove background
-    output = remove(pil_image)
+    # Remove background with caching
+    output = _cached_rembg(image_path)
     
     # Create foreground (with alpha) and background
     foreground = output.convert('RGBA')
@@ -957,7 +973,6 @@ def _apply_parallax_effect(clip, effect_type=None):
         Clip with parallax effect, or original clip if rembg fails
     """
     try:
-        from rembg import remove
         from PIL import Image
         import io
     except ImportError:
@@ -976,14 +991,22 @@ def _apply_parallax_effect(clip, effect_type=None):
     first_frame = clip.get_frame(0)
     
     try:
-        # Remove background using rembg
+        # Remove background using cached rembg
         pil_image = Image.fromarray(first_frame)
         # rembg expects RGB, ensure we have it
         if pil_image.mode != 'RGB':
             pil_image = pil_image.convert('RGB')
+
+        # Save temp frame for caching
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+            pil_image.save(tmp.name)
+            tmp_path = tmp.name
         
-        # Process with rembg
-        output = remove(pil_image)
+        try:
+            output = _cached_rembg(tmp_path)
+        finally:
+            os.unlink(tmp_path)
         
         # Create foreground (with alpha) and background (without subject)
         foreground = output.convert('RGBA')
