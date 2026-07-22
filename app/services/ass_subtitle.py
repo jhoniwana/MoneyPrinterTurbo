@@ -20,11 +20,6 @@ from app.utils import utils
 
 CHUNK_SIZE = 4
 
-# MP3/AAC encoder delay compensation (seconds)
-# Edge TTS cues are precise to synthesized speech, but audio playback
-# is delayed by MP3 framing (~26ms) + AAC re-encoding (~46ms).
-GLOBAL_OFFSET = 0.08
-
 # Smooth color transition duration in ms (1 frame at 30fps)
 TRANSITION_MS = 30
 
@@ -124,8 +119,8 @@ def create_word_by_word_ass(
     Expert-optimized (v2):
     - Single Dialogue line per chunk (no overlapping lines)
     - \\t transforms for smooth color transitions (no \\fad flickering)
-    - GLOBAL_OFFSET +80ms for MP3/AAC encoder delay compensation
     - PlayResX 1920 to prevent text wrapping
+    - Audio sync handled by FFmpeg aresample filter (no manual offset needed)
     """
     logger.info(f"generating TikTok-style ASS subtitle (v2): {subtitle_file}")
 
@@ -218,6 +213,7 @@ def create_word_by_word_ass_from_edge_cues(
 ) -> str:
     logger.info("generating TikTok-style ASS from Edge TTS cues (v2)")
 
+    # Step 1: Extract word boundaries from SubMaker cues
     word_boundaries = []
     if hasattr(sub_maker, 'cues') and sub_maker.cues:
         for cue in sub_maker.cues:
@@ -225,6 +221,37 @@ def create_word_by_word_ass_from_edge_cues(
             start = cue.start.total_seconds()
             end = cue.end.total_seconds()
             word_boundaries.append((word, start, end))
+
+    # Step 2: If no word-level cues, use SentenceBoundary for anchored distribution
+    # This is the KEY fix: distribute words proportionally WITHIN each sentence,
+    # anchored to the exact SentenceBoundary timing from Edge TTS.
+    sentences = []
+    if not word_boundaries and hasattr(sub_maker, 'cues') and sub_maker.cues:
+        # Edge TTS 7.x gives SentenceBoundary, not WordBoundary
+        # Use SentenceBoundary offset/duration to anchor each sentence's timing
+        for cue in sub_maker.cues:
+            sentence_text = unescape(cue.content).strip()
+            if not sentence_text:
+                continue
+            sentence_start = cue.start.total_seconds()
+            sentence_duration = cue.end.total_seconds() - sentence_start
+
+            words = sentence_text.split()
+            if not words:
+                continue
+
+            # Distribute words proportionally by weight (chars + 1 for space)
+            weights = [len(w) + 1 for w in words]
+            total_weight = sum(weights)
+
+            current_time = sentence_start
+            for i, word in enumerate(words):
+                word_duration = (weights[i] / total_weight) * sentence_duration
+                word_boundaries.append((word, current_time, current_time + word_duration))
+                current_time += word_duration
+
+            sentences.append((sentence_text, sentence_start, sentence_start + sentence_duration))
+        logger.info(f"anchored {len(sentences)} sentences from SentenceBoundary cues")
     elif hasattr(sub_maker, 'subs') and sub_maker.subs:
         for offset, sub in zip(sub_maker.offset, sub_maker.subs):
             start, end = offset
@@ -232,40 +259,37 @@ def create_word_by_word_ass_from_edge_cues(
             end_sec = end / 10_000_000
             word_boundaries.append((unescape(sub), start_sec, end_sec))
 
-    if not word_boundaries:
-        logger.warning("no word boundaries from Edge TTS")
-        return ""
-
-    sentences = []
-    if srt_file and os.path.exists(srt_file):
-        from app.services.subtitle import file_to_subtitles
-        srt_items_raw = file_to_subtitles(srt_file)
-        for idx, time_str, text in srt_items_raw:
-            times = time_str.split(' --> ')
-            if len(times) != 2:
-                continue
-            start_str, end_str = times
-            start_parts = start_str.replace(',', '.').split(':')
-            end_parts = end_str.replace(',', '.').split(':')
-            if len(start_parts) == 3 and len(end_parts) == 3:
-                start = float(start_parts[0]) * 3600 + float(start_parts[1]) * 60 + float(start_parts[2])
-                end = float(end_parts[0]) * 3600 + float(end_parts[1]) * 60 + float(end_parts[2])
-                sentences.append((text.strip(), start, end))
-        logger.info(f"parsed {len(sentences)} sentences from SRT")
-    else:
-        script_lines = utils.split_string_by_punctuations(script_text)
-        total_words = len(word_boundaries)
-        words_per_line = max(1, total_words // len(script_lines)) if script_lines else 1
-        word_idx = 0
-        for line in script_lines:
-            line_words = word_boundaries[word_idx:word_idx + words_per_line]
-            if line_words:
-                sentences.append((line.strip(), line_words[0][1], line_words[-1][2]))
-                word_idx += words_per_line
-        if word_idx < total_words and sentences:
-            remaining = word_boundaries[word_idx:]
-            last = sentences[-1]
-            sentences[-1] = (last[0], last[1], remaining[-1][2])
+    # Fallback: parse from SRT file
+    if not sentences:
+        if srt_file and os.path.exists(srt_file):
+            from app.services.subtitle import file_to_subtitles
+            srt_items_raw = file_to_subtitles(srt_file)
+            for idx, time_str, text in srt_items_raw:
+                times = time_str.split(' --> ')
+                if len(times) != 2:
+                    continue
+                start_str, end_str = times
+                start_parts = start_str.replace(',', '.').split(':')
+                end_parts = end_str.replace(',', '.').split(':')
+                if len(start_parts) == 3 and len(end_parts) == 3:
+                    start = float(start_parts[0]) * 3600 + float(start_parts[1]) * 60 + float(start_parts[2])
+                    end = float(end_parts[0]) * 3600 + float(end_parts[1]) * 60 + float(end_parts[2])
+                    sentences.append((text.strip(), start, end))
+            logger.info(f"parsed {len(sentences)} sentences from SRT")
+        else:
+            script_lines = utils.split_string_by_punctuations(script_text)
+            total_words = len(word_boundaries)
+            words_per_line = max(1, total_words // len(script_lines)) if script_lines else 1
+            word_idx = 0
+            for line in script_lines:
+                line_words = word_boundaries[word_idx:word_idx + words_per_line]
+                if line_words:
+                    sentences.append((line.strip(), line_words[0][1], line_words[-1][2]))
+                    word_idx += words_per_line
+            if word_idx < total_words and sentences:
+                remaining = word_boundaries[word_idx:]
+                last = sentences[-1]
+                sentences[-1] = (last[0], last[1], remaining[-1][2])
 
     if not sentences:
         logger.warning("no sentences for ASS subtitle")

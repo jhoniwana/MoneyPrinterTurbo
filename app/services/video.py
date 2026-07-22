@@ -1618,15 +1618,19 @@ def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_fi
     # ASS filter requires CPU rendering (libass is CPU-only).
     # Always use software encoding for the ASS subtitle burn-in pass,
     # even if VAAPI is configured for other passes.
+    # -af "aresample=async=1:first_pts=0" auto-detects MP3 encoder delay
+    # and aligns audio to video frame 0, eliminating sync drift without Whisper.
     command = [
         ffmpeg_bin,
         "-y",
         "-i", input_video,
         "-vf", f"ass='{escaped_ass_path}'",
+        "-af", "aresample=async=1:first_pts=0",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
-        "-c:a", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
         "-movflags", "+faststart",
         output_video,
     ]
