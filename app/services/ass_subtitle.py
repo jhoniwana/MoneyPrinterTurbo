@@ -3,7 +3,7 @@ TikTok/CapCut-style ASS subtitle generator.
 
 Expert-optimized for stable positioning:
 - PlayResX: 1920 (wider layout region prevents text wrapping)
-- BorderStyle 4 (opaque box), Anton font, yellow word highlight
+- BorderStyle 1 (outline+shadow), white outline glow, Anton font, yellow word highlight
 - \\q2 + \\pos on every dialogue line (belt-and-suspenders no-wrap + fixed position)
 - \\fad(30,30) for smooth transitions between lines
 """
@@ -86,7 +86,7 @@ YCbCr Matrix: TV.709
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,2,0,4,0,0,2,80,80,150,1
+Style: Default,{font_name},{font_size},{primary},&H000000FF,&H00FFFFFF,&H80000000,-1,0,0,0,100,100,2,0,1,3,2,2,80,80,150,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

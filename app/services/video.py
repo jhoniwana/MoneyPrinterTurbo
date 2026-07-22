@@ -618,9 +618,9 @@ def _create_ken_burns_image_clip(image_path: str, duration: float = 3.0):
     ffmpeg_bin = utils.get_ffmpeg_binary()
     output_file = f"{image_path}.kb.mp4"
 
-    # Build zoompan filter: oversample 2x then downscale for quality
+    # Build zoompan filter: force-cover crop (no black borders), oversample 2x, then zoompan
     filter_complex = (
-        f"scale=2160:3840:flags=lanczos,"
+        f"scale=2160:3840:flags=lanczos:force_original_aspect_ratio=increase,crop=2160:3840,"
         f"zoompan={zoom_params}:d={num_frames}:s={output_w}x{output_h}:fps={fps},"
         f"format=yuv420p"
     )
