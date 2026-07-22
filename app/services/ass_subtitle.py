@@ -1,11 +1,12 @@
 """
 TikTok/CapCut-style ASS subtitle generator.
 
-Expert-optimized for stable positioning:
+Expert-optimized (v2 - no flickering, proper sync):
+- Single Dialogue line per chunk with \\t transform tags for word-by-word highlight
+- No overlapping lines (zero double-render artifacts)
+- GLOBAL_OFFSET +80ms to compensate for MP3/AAC encoder delay
 - PlayResX: 1920 (wider layout region prevents text wrapping)
-- BorderStyle 1 (outline+shadow), white outline glow, Anton font, yellow word highlight
-- \\q2 + \\pos on every dialogue line (belt-and-suspenders no-wrap + fixed position)
-- \\fad(30,30) for smooth transitions between lines
+- BorderStyle 1 (outline+shadow), white outline glow, Anton font
 """
 
 import os
@@ -18,7 +19,14 @@ from app.config import config
 from app.utils import utils
 
 CHUNK_SIZE = 4
-OVERLAP = 0.015
+
+# MP3/AAC encoder delay compensation (seconds)
+# Edge TTS cues are precise to synthesized speech, but audio playback
+# is delayed by MP3 framing (~26ms) + AAC re-encoding (~46ms).
+GLOBAL_OFFSET = 0.08
+
+# Smooth color transition duration in ms (1 frame at 30fps)
+TRANSITION_MS = 30
 
 
 def _seconds_to_ass_time(seconds: float) -> str:
@@ -38,6 +46,64 @@ def _hex_to_ass(hex_color: str) -> str:
     return hex_color
 
 
+def _build_chunk_dialogue(
+    chunk: List[Tuple[str, float, float]],
+    pos_x: int,
+    pos_y: int,
+) -> str:
+    """
+    Build a single Dialogue line for a chunk of words using \\t transform tags.
+
+    Instead of N separate Dialogue lines (one per word) that overlap and cause
+    flickering, we emit ONE line per chunk and animate colors with \\t transforms.
+
+    Example for chunk ["En", "las", "llanuras", "de"]:
+      {\\1c&H0000FFFF\\t(280,310,\\1c&H00FFFFFF)}En
+      {\\1c&H00FFFFFF\\t(280,310,\\1c&H0000FFFF)}las
+      {\\1c&H00FFFFFF\\t(280,310,\\1c&H0000FFFF)}llanuras
+      {\\1c&H00FFFFFF}de
+    """
+    if not chunk:
+        return ""
+
+    chunk_start_ms = int(chunk[0][1] * 1000)
+    chunk_end_ms = int(chunk[-1][2] * 1000)
+
+    parts = []
+    for i, (word, w_start, w_end) in enumerate(chunk):
+        w_start_ms = int(w_start * 1000)
+        rel_start = max(0, w_start_ms - chunk_start_ms)
+
+        tags = []
+
+        if i == 0:
+            # First word starts highlighted (yellow)
+            tags.append(f"\\1c{_hex_to_ass('#FFFF00')}")
+            # Schedule it to turn white when next word starts
+            if len(chunk) > 1:
+                next_start_ms = int(chunk[1][1] * 1000) - chunk_start_ms
+                tags.append(f"\\t({next_start_ms},{next_start_ms + TRANSITION_MS},\\1c{_hex_to_ass('#FFFFFF')})")
+        else:
+            # Other words start white, turn yellow at their start time
+            tags.append(f"\\1c{_hex_to_ass('#FFFFFF')}")
+            tags.append(f"\\t({rel_start},{rel_start + TRANSITION_MS},\\1c{_hex_to_ass('#FFFF00')})")
+            # If not the last word, schedule it to turn back to white
+            if i < len(chunk) - 1:
+                next_start_ms = int(chunk[i + 1][1] * 1000) - chunk_start_ms
+                tags.append(f"\\t({next_start_ms},{next_start_ms + TRANSITION_MS},\\1c{_hex_to_ass('#FFFFFF')})")
+
+        parts.append(f"{{{''.join(tags)}}}{word}")
+
+    ass_text = " ".join(parts)
+
+    start_time = _seconds_to_ass_time(max(0.0, chunk[0][1] + GLOBAL_OFFSET))
+    end_time = _seconds_to_ass_time(max(0.0, chunk[-1][2] + GLOBAL_OFFSET))
+
+    # \\q2 = no-wrap, \\pos = fixed position
+    # No \\fad here — color transitions are handled by \\t transforms
+    return f"Dialogue: 0,{start_time},{end_time},Default,,0,0,0,,{{\\q2\\pos({pos_x},{pos_y})}}{ass_text}"
+
+
 def create_word_by_word_ass(
     subtitle_file: str,
     sentences: List[Tuple[str, float, float]],
@@ -53,18 +119,17 @@ def create_word_by_word_ass(
     chunk_size: int = CHUNK_SIZE,
 ) -> str:
     """
-    Generate TikTok/Hormozi-style ASS subtitle.
+    Generate TikTok/CapCut-style ASS subtitle with \\t transforms.
 
-    Expert-optimized:
-    - PlayResX set to 1920 (wider than video) to prevent text wrapping
-    - \\q2 on every line forces no-wrap
-    - \\pos(960,1770) locks position for Alignment 2 + MarginV 150
-    - \\fad(30,30) for smooth transitions
+    Expert-optimized (v2):
+    - Single Dialogue line per chunk (no overlapping lines)
+    - \\t transforms for smooth color transitions (no \\fad flickering)
+    - GLOBAL_OFFSET +80ms for MP3/AAC encoder delay compensation
+    - PlayResX 1920 to prevent text wrapping
     """
-    logger.info(f"generating TikTok-style ASS subtitle: {subtitle_file}")
+    logger.info(f"generating TikTok-style ASS subtitle (v2): {subtitle_file}")
 
     primary = _hex_to_ass(font_color)
-    hl = _hex_to_ass(highlight_color)
 
     # PlayResX 1920 > video 1080 — libass scales down, but layout region is wider
     # This prevents text from wrapping when 4 words exceed 980px
@@ -123,33 +188,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if not chunk:
                 continue
 
-            chunk_start_time = chunk[0][1]
-            prev_end = None
-
-            for i, (cur_word, w_start, w_end) in enumerate(chunk):
-                display_start = prev_end - OVERLAP if prev_end is not None else w_start
-                display_start = max(display_start, chunk_start_time)
-
-                parts = []
-                for j, (w, _, _) in enumerate(chunk):
-                    if j == i:
-                        parts.append(f"{{\\1c{hl}}}{w}")
-                    else:
-                        parts.append(w)
-
-                ass_text = " ".join(parts)
-                # \\q2 = no-wrap, \\pos = fixed position, \\fad = smooth transitions
-                dialogue_lines.append(
-                    f"Dialogue: 0,{_seconds_to_ass_time(display_start)},{_seconds_to_ass_time(w_end)},Default,,0,0,0,,{{\\q2\\pos({pos_x},{pos_y})\\fad(30,30)}}{ass_text}"
-                )
-                prev_end = w_end
+            dialogue_line = _build_chunk_dialogue(chunk, pos_x, pos_y)
+            if dialogue_line:
+                dialogue_lines.append(dialogue_line)
 
     with open(subtitle_file, 'w', encoding='utf-8-sig') as f:
         f.write(header)
         f.write('\n'.join(dialogue_lines))
         f.write('\n')
 
-    logger.info(f"TikTok-style ASS subtitle created: {subtitle_file} ({len(dialogue_lines)} lines)")
+    logger.info(f"TikTok-style ASS subtitle created: {subtitle_file} ({len(dialogue_lines)} lines, {GLOBAL_OFFSET*1000:.0f}ms offset)")
     return subtitle_file
 
 
@@ -168,7 +216,7 @@ def create_word_by_word_ass_from_edge_cues(
     video_height: int = 1920,
     chunk_size: int = CHUNK_SIZE,
 ) -> str:
-    logger.info("generating TikTok-style ASS from Edge TTS cues")
+    logger.info("generating TikTok-style ASS from Edge TTS cues (v2)")
 
     word_boundaries = []
     if hasattr(sub_maker, 'cues') and sub_maker.cues:
