@@ -42,11 +42,11 @@ def create_word_by_word_ass(
     sentences: List[Tuple[str, float, float]],
     word_boundaries: List[Tuple[str, float, float]],
     font_name: str = "Noto Sans Bold",
-    font_size: int = 80,
+    font_size: int = 120,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFDD00",
     stroke_color: str = "#000000",
-    stroke_width: int = 3,
+    stroke_width: int = 4,
     video_width: int = 1080,
     video_height: int = 1920,
     chunk_size: int = CHUNK_SIZE,
@@ -55,6 +55,7 @@ def create_word_by_word_ass(
 
     primary = _hex_to_ass(font_color)
     outline = _hex_to_ass(stroke_color)
+    hl_ass = _hex_to_ass(highlight_color)
 
     header = f"""[Script Info]
 ScriptType: v4.00+
@@ -113,7 +114,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 parts = [f"{{\\q2}}"]
                 for j, (w, _, _) in enumerate(chunk):
                     if j == i:
-                        parts.append(f"{{\\1c&H00{highlight_color[4:6]}{highlight_color[2:4]}{highlight_color[0:2]}&}}{w}")
+                        parts.append(f"{{\\1c{hl_ass}\\b1}}{w}{{\\b0}}")
                     else:
                         parts.append(w)
 
@@ -138,7 +139,7 @@ def create_word_by_word_ass_from_edge_cues(
     script_text: str,
     srt_file: str = None,
     font_name: str = "Noto Sans Bold",
-    font_size: int = 80,
+    font_size: int = 120,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFDD00",
     stroke_color: str = "#000000",
@@ -203,10 +204,6 @@ def create_word_by_word_ass_from_edge_cues(
         return ""
 
     font_name = config.ui.get("font_name", font_name)
-    font_size = config.ui.get("font_size", font_size)
-    font_color = config.ui.get("text_fore_color", font_color)
-    stroke_color = config.ui.get("stroke_color", stroke_color)
-    stroke_width = config.ui.get("stroke_width", stroke_width)
     highlight_color = config.app.get("subtitle_highlight_color", highlight_color)
 
     import subprocess
@@ -239,7 +236,7 @@ def create_word_by_word_ass_from_srt(
     srt_file: str,
     audio_duration: float,
     font_name: str = "Noto Sans Bold",
-    font_size: int = 80,
+    font_size: int = 120,
     font_color: str = "#FFFFFF",
     highlight_color: str = "#FFDD00",
     stroke_color: str = "#000000",
@@ -276,10 +273,6 @@ def create_word_by_word_ass_from_srt(
             word_boundaries.append((word, start, end))
 
     font_name = config.ui.get("font_name", font_name)
-    font_size = config.ui.get("font_size", font_size)
-    font_color = config.ui.get("text_fore_color", font_color)
-    stroke_color = config.ui.get("stroke_color", stroke_color)
-    stroke_width = config.ui.get("stroke_width", stroke_width)
     highlight_color = config.app.get("subtitle_highlight_color", highlight_color)
 
     return create_word_by_word_ass(

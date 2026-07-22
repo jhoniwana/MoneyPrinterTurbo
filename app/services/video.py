@@ -674,15 +674,12 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
     # Choose random parallax effect
     effect_type = random.choice(["zoom_in", "pan_left", "pan_right"])
     
-    bg_speed = 0.5  # Background moves slowly
-    fg_speed = 1.5  # Foreground moves faster
-    
     if effect_type == "zoom_in":
         def make_frame(t):
             progress = t / duration
             
-            # Background: slow zoom
-            bg_zoom = 1.0 + (0.1 * progress * bg_speed)
+            # Background zooms in (moves)
+            bg_zoom = 1.0 + (0.2 * progress)
             bg_new_w = int(w / bg_zoom)
             bg_new_h = int(h / bg_zoom)
             bg_x = (w - bg_new_w) // 2
@@ -690,13 +687,8 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
             bg_cropped = bg_array[bg_y:bg_y+bg_new_h, bg_x:bg_x+bg_new_w]
             bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
             
-            # Foreground: faster zoom
-            fg_zoom = 1.0 + (0.15 * progress * fg_speed)
-            fg_new_w = int(w / fg_zoom)
-            fg_new_h = int(h / fg_zoom)
-            fg_x = (w - fg_new_w) // 2
-            fg_y = (h - fg_new_h) // 2
-            fg_cropped = fg_array[fg_y:fg_y+fg_new_h, fg_x:fg_x+fg_new_w]
+            # Foreground stays still (just crop center)
+            fg_cropped = fg_array[h//4:3*h//4, w//4:3*w//4]
             fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
             
             # Composite
@@ -708,23 +700,17 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
         def make_frame(t):
             progress = t / duration
             
-            # Background: slow pan left
-            bg_offset = int(30 * progress * bg_speed)
+            # Background pans left (moves)
+            bg_offset = int(50 * progress)
             bg_shifted = np.roll(bg_array, -bg_offset, axis=1)
-            bg_cropped = bg_shifted[:, :w]
-            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            bg_resized = np.array(Image.fromarray(bg_shifted[:, :w]).resize((w, h), Image.LANCZOS))
             
-            # Foreground: faster pan left
-            fg_offset = int(30 * progress * fg_speed)
-            fg_shifted = np.roll(fg_array[:, :, :3], -fg_offset, axis=1)
-            fg_cropped = fg_shifted[:, :w]
-            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            # Foreground stays still
+            fg_resized = np.array(Image.fromarray(fg_array[:, :, :3]).resize((w, h), Image.LANCZOS))
             
-            # Get alpha mask resized
             alpha = fg_array[:, :, 3:4] / 255.0
             alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
             
-            # Composite
             result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
             return result.astype(np.uint8)
     
@@ -732,23 +718,17 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
         def make_frame(t):
             progress = t / duration
             
-            # Background: slow pan right
-            bg_offset = int(30 * progress * bg_speed)
+            # Background pans right (moves)
+            bg_offset = int(50 * progress)
             bg_shifted = np.roll(bg_array, bg_offset, axis=1)
-            bg_cropped = bg_shifted[:, :w]
-            bg_resized = np.array(Image.fromarray(bg_cropped).resize((w, h), Image.LANCZOS))
+            bg_resized = np.array(Image.fromarray(bg_shifted[:, :w]).resize((w, h), Image.LANCZOS))
             
-            # Foreground: faster pan right
-            fg_offset = int(30 * progress * fg_speed)
-            fg_shifted = np.roll(fg_array[:, :, :3], fg_offset, axis=1)
-            fg_cropped = fg_shifted[:, :w]
-            fg_resized = np.array(Image.fromarray(fg_cropped).resize((w, h), Image.LANCZOS))
+            # Foreground stays still
+            fg_resized = np.array(Image.fromarray(fg_array[:, :, :3]).resize((w, h), Image.LANCZOS))
             
-            # Get alpha mask resized
             alpha = fg_array[:, :, 3:4] / 255.0
             alpha_resized = np.array(Image.fromarray((alpha[:, :, 0] * 255).astype(np.uint8)).resize((w, h), Image.LANCZOS)) / 255.0
             
-            # Composite
             result = bg_resized * (1 - alpha_resized[:, :, np.newaxis]) + fg_resized * alpha_resized[:, :, np.newaxis]
             return result.astype(np.uint8)
     
