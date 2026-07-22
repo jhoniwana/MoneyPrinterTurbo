@@ -1615,38 +1615,22 @@ def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_fi
     # On Windows, backslashes need to be escaped
     escaped_ass_path = ass_file.replace("\\", "/").replace(":", "\\:")
     
-    # Check for VAAPI availability
-    vaapi_available = os.path.exists("/dev/dri/renderD128")
-    
-    if vaapi_available:
-        # VAAPI: hwupload input then ass filter then hwdownload for VAAPI encoding
-        command = [
-            ffmpeg_bin,
-            "-y",
-            "-vaapi_device", "/dev/dri/renderD128",
-            "-i", input_video,
-            "-vf", f"format=nv12,hwupload,ass='{escaped_ass_path}',hwdownload,format=nv12",
-            "-c:v", "h264_vaapi",
-            "-qp", "23",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            output_video,
-        ]
-        logger.info("using VAAPI hardware encoding for ASS subtitles")
-    else:
-        command = [
-            ffmpeg_bin,
-            "-y",
-            "-i", input_video,
-            "-vf", f"ass='{escaped_ass_path}'",
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            output_video,
-        ]
-        logger.info("using software encoding for ASS subtitles")
+    # ASS filter requires CPU rendering (libass is CPU-only).
+    # Always use software encoding for the ASS subtitle burn-in pass,
+    # even if VAAPI is configured for other passes.
+    command = [
+        ffmpeg_bin,
+        "-y",
+        "-i", input_video,
+        "-vf", f"ass='{escaped_ass_path}'",
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        output_video,
+    ]
+    logger.info("using software encoding for ASS subtitle burn-in (libass requires CPU)")
     
     logger.info(f"applying ASS subtitles with FFmpeg: {ass_file}")
     logger.debug(f"FFmpeg command: {' '.join(command)}")
