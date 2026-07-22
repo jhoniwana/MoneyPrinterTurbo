@@ -2376,6 +2376,7 @@ def _render_video_settings(panel, params):
                 ("NVIDIA NVENC (h264_nvenc)", "h264_nvenc"),
                 ("AMD AMF (h264_amf)", "h264_amf"),
                 ("Intel QSV (h264_qsv)", "h264_qsv"),
+                ("Intel VAAPI (h264_vaapi)", "h264_vaapi"),
                 ("Windows MediaFoundation (h264_mf)", "h264_mf"),
                 ("macOS VideoToolbox (h264_videotoolbox)", "h264_videotoolbox"),
             ]

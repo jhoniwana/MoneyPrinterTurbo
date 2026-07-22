@@ -1598,6 +1598,9 @@ def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_fi
     This function uses FFmpeg's native ASS subtitle filter to render
     karaoke-style word-by-word subtitles with proper animation.
     
+    Uses VAAPI hardware encoding when available (Intel/AMD GPU),
+    falls back to libx264 software encoding otherwise.
+    
     Args:
         input_video: Path to input video file
         output_video: Path to output video file
@@ -1612,19 +1615,38 @@ def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_fi
     # On Windows, backslashes need to be escaped
     escaped_ass_path = ass_file.replace("\\", "/").replace(":", "\\:")
     
-    # Build FFmpeg command
-    command = [
-        ffmpeg_bin,
-        "-y",  # Overwrite output file
-        "-i", input_video,
-        "-vf", f"ass='{escaped_ass_path}'",
-        "-c:v", "libx264",
-        "-preset", "medium",
-        "-crf", "23",
-        "-c:a", "copy",  # Copy audio without re-encoding
-        "-movflags", "+faststart",
-        output_video,
-    ]
+    # Check for VAAPI availability
+    vaapi_available = os.path.exists("/dev/dri/renderD128")
+    
+    if vaapi_available:
+        # VAAPI: hwupload input then ass filter then hwdownload for VAAPI encoding
+        command = [
+            ffmpeg_bin,
+            "-y",
+            "-vaapi_device", "/dev/dri/renderD128",
+            "-i", input_video,
+            "-vf", f"format=nv12,hwupload,ass='{escaped_ass_path}',hwdownload,format=nv12",
+            "-c:v", "h264_vaapi",
+            "-qp", "23",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            output_video,
+        ]
+        logger.info("using VAAPI hardware encoding for ASS subtitles")
+    else:
+        command = [
+            ffmpeg_bin,
+            "-y",
+            "-i", input_video,
+            "-vf", f"ass='{escaped_ass_path}'",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            output_video,
+        ]
+        logger.info("using software encoding for ASS subtitles")
     
     logger.info(f"applying ASS subtitles with FFmpeg: {ass_file}")
     logger.debug(f"FFmpeg command: {' '.join(command)}")
