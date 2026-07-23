@@ -641,9 +641,21 @@ def _create_ken_burns_image_clip(image_path: str, duration: float = 3.0):
 
     if result.returncode != 0:
         logger.warning(f"zoompan failed ({effect_type}), falling back to simple image: {result.stderr[:200]}")
-        # Fallback: static image clip
+        # Fallback: static image clip with crop-fill (no black borders)
         clip, _ = _open_image_clip_with_fallback(image_path)
-        clip = clip.resized(new_size=(output_w, output_h))
+        clip_w, clip_h = clip.size
+        clip_ratio = clip_w / clip_h
+        target_ratio = output_w / output_h
+        if clip_ratio > target_ratio:
+            scale = output_h / clip_h
+        else:
+            scale = output_w / clip_w
+        new_w = int(clip_w * scale)
+        new_h = int(clip_h * scale)
+        clip = clip.resized(new_size=(new_w, new_h))
+        cx = (new_w - output_w) // 2
+        cy = (new_h - output_h) // 2
+        clip = clip.cropped(x1=cx, y1=cy, x2=cx + output_w, y2=cy + output_h)
         clip = clip.with_duration(duration)
         return clip
 
@@ -1259,17 +1271,20 @@ def combine_videos(
                 if clip_ratio == video_ratio:
                     clip = clip.resized(new_size=(video_width, video_height))
                 else:
+                    # Crop-fill: scale to cover target, then center-crop (no black borders)
                     if clip_ratio > video_ratio:
-                        scale_factor = video_width / clip_w
-                    else:
                         scale_factor = video_height / clip_h
+                    else:
+                        scale_factor = video_width / clip_w
 
                     new_width = int(clip_w * scale_factor)
                     new_height = int(clip_h * scale_factor)
 
-                    background = ColorClip(size=(video_width, video_height), color=(0, 0, 0)).with_duration(clip_duration)
-                    clip_resized = clip.resized(new_size=(new_width, new_height)).with_position("center")
-                    clip = CompositeVideoClip([background, clip_resized])
+                    clip = clip.resized(new_size=(new_width, new_height))
+                    # Center crop to exact target size
+                    crop_x = (new_width - video_width) // 2
+                    crop_y = (new_height - video_height) // 2
+                    clip = clip.cropped(x1=crop_x, y1=crop_y, x2=crop_x + video_width, y2=crop_y + video_height)
                     
             shuffle_side = random.choice(["left", "right", "top", "bottom"])
             if transition_value in (None, VideoTransitionMode.none.value):

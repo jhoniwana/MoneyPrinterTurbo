@@ -45,6 +45,7 @@ def _build_chunk_dialogue(
     chunk: List[Tuple[str, float, float]],
     pos_x: int,
     pos_y: int,
+    highlight_color: str = "#FFFF00",
 ) -> str:
     """
     Build a single Dialogue line for a chunk of words using \\t transform tags.
@@ -72,16 +73,16 @@ def _build_chunk_dialogue(
         tags = []
 
         if i == 0:
-            # First word starts highlighted (yellow)
-            tags.append(f"\\1c{_hex_to_ass('#FFFF00')}")
+            # First word starts highlighted
+            tags.append(f"\\1c{_hex_to_ass(highlight_color)}")
             # Schedule it to turn white when next word starts
             if len(chunk) > 1:
                 next_start_ms = int(chunk[1][1] * 1000) - chunk_start_ms
                 tags.append(f"\\t({next_start_ms},{next_start_ms + TRANSITION_MS},\\1c{_hex_to_ass('#FFFFFF')})")
         else:
-            # Other words start white, turn yellow at their start time
+            # Other words start white, turn highlight at their start time
             tags.append(f"\\1c{_hex_to_ass('#FFFFFF')}")
-            tags.append(f"\\t({rel_start},{rel_start + TRANSITION_MS},\\1c{_hex_to_ass('#FFFF00')})")
+            tags.append(f"\\t({rel_start},{rel_start + TRANSITION_MS},\\1c{_hex_to_ass(highlight_color)})")
             # If not the last word, schedule it to turn back to white
             if i < len(chunk) - 1:
                 next_start_ms = int(chunk[i + 1][1] * 1000) - chunk_start_ms
@@ -183,7 +184,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if not chunk:
                 continue
 
-            dialogue_line = _build_chunk_dialogue(chunk, pos_x, pos_y)
+            dialogue_line = _build_chunk_dialogue(chunk, pos_x, pos_y, highlight_color=highlight_color)
             if dialogue_line:
                 dialogue_lines.append(dialogue_line)
 
@@ -213,45 +214,66 @@ def create_word_by_word_ass_from_edge_cues(
 ) -> str:
     logger.info("generating TikTok-style ASS from Edge TTS cues (v2)")
 
-    # Step 1: Extract word boundaries from SubMaker cues
+    # Edge TTS 7.x only gives SentenceBoundary (no WordBoundary).
+    # Strategy: use SentenceBoundary timing to anchor proportional word distribution
+    # within each sentence. Error accumulates max ~200ms per sentence (imperceptible).
     word_boundaries = []
-    if hasattr(sub_maker, 'cues') and sub_maker.cues:
-        for cue in sub_maker.cues:
-            word = unescape(cue.content)
-            start = cue.start.total_seconds()
-            end = cue.end.total_seconds()
-            word_boundaries.append((word, start, end))
-
-    # Step 2: If no word-level cues, use SentenceBoundary for anchored distribution
-    # This is the KEY fix: distribute words proportionally WITHIN each sentence,
-    # anchored to the exact SentenceBoundary timing from Edge TTS.
     sentences = []
-    if not word_boundaries and hasattr(sub_maker, 'cues') and sub_maker.cues:
-        # Edge TTS 7.x gives SentenceBoundary, not WordBoundary
-        # Use SentenceBoundary offset/duration to anchor each sentence's timing
-        for cue in sub_maker.cues:
-            sentence_text = unescape(cue.content).strip()
-            if not sentence_text:
-                continue
-            sentence_start = cue.start.total_seconds()
-            sentence_duration = cue.end.total_seconds() - sentence_start
 
-            words = sentence_text.split()
-            if not words:
-                continue
+    if hasattr(sub_maker, 'cues') and sub_maker.cues:
+        # Detect if cues are word-level or sentence-level by checking duration.
+        # Word-level cues: < 2s each; SentenceBoundary: typically 3-10s.
+        first_cue = sub_maker.cues[0]
+        first_duration = first_cue.end.total_seconds() - first_cue.start.total_seconds()
 
-            # Distribute words proportionally by weight (chars + 1 for space)
-            weights = [len(w) + 1 for w in words]
-            total_weight = sum(weights)
+        if first_duration > 2.5:
+            # SentenceBoundary cues — use anchored proportional distribution
+            logger.info("detected SentenceBoundary cues, using anchored distribution")
+            for cue in sub_maker.cues:
+                sentence_text = unescape(cue.content).strip()
+                if not sentence_text:
+                    continue
+                sentence_start = cue.start.total_seconds()
+                sentence_duration = cue.end.total_seconds() - sentence_start
 
-            current_time = sentence_start
-            for i, word in enumerate(words):
-                word_duration = (weights[i] / total_weight) * sentence_duration
-                word_boundaries.append((word, current_time, current_time + word_duration))
-                current_time += word_duration
+                words = sentence_text.split()
+                if not words:
+                    continue
 
-            sentences.append((sentence_text, sentence_start, sentence_start + sentence_duration))
-        logger.info(f"anchored {len(sentences)} sentences from SentenceBoundary cues")
+                weights = [len(w) + 1 for w in words]
+                total_weight = sum(weights)
+
+                current_time = sentence_start
+                for i, word in enumerate(words):
+                    word_duration = (weights[i] / total_weight) * sentence_duration
+                    word_boundaries.append((word, current_time, current_time + word_duration))
+                    current_time += word_duration
+
+                sentences.append((sentence_text, sentence_start, sentence_start + sentence_duration))
+            logger.info(f"anchored {len(sentences)} sentences, {len(word_boundaries)} words")
+        else:
+            # WordBoundary cues — use directly
+            logger.info("detected WordBoundary cues, using direct timing")
+            for cue in sub_maker.cues:
+                word = unescape(cue.content)
+                start = cue.start.total_seconds()
+                end = cue.end.total_seconds()
+                word_boundaries.append((word, start, end))
+            # Build sentences from script text using punctuation splits
+            script_lines = utils.split_string_by_punctuations(script_text)
+            total_words = len(word_boundaries)
+            words_per_line = max(1, total_words // len(script_lines)) if script_lines else 1
+            word_idx = 0
+            for line in script_lines:
+                line_words = word_boundaries[word_idx:word_idx + words_per_line]
+                if line_words:
+                    sentences.append((line.strip(), line_words[0][1], line_words[-1][2]))
+                    word_idx += words_per_line
+            if word_idx < total_words and sentences:
+                remaining = word_boundaries[word_idx:]
+                last = sentences[-1]
+                sentences[-1] = (last[0], last[1], remaining[-1][2])
+
     elif hasattr(sub_maker, 'subs') and sub_maker.subs:
         for offset, sub in zip(sub_maker.offset, sub_maker.subs):
             start, end = offset
