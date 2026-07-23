@@ -260,16 +260,20 @@ def create_word_by_word_ass_from_edge_cues(
                 end = cue.end.total_seconds()
                 word_boundaries.append((word, start, end))
             # Build sentences from script text using punctuation splits
+            # Match words to sentences by order (not naive even split)
             script_lines = utils.split_string_by_punctuations(script_text)
-            total_words = len(word_boundaries)
-            words_per_line = max(1, total_words // len(script_lines)) if script_lines else 1
             word_idx = 0
             for line in script_lines:
-                line_words = word_boundaries[word_idx:word_idx + words_per_line]
-                if line_words:
-                    sentences.append((line.strip(), line_words[0][1], line_words[-1][2]))
-                    word_idx += words_per_line
-            if word_idx < total_words and sentences:
+                line_words_clean = line.strip().split()
+                if not line_words_clean:
+                    continue
+                count = len(line_words_clean)
+                line_wb = word_boundaries[word_idx:word_idx + count]
+                if line_wb:
+                    sentences.append((line.strip(), line_wb[0][1], line_wb[-1][2]))
+                    word_idx += count
+            # Assign any remaining words to the last sentence
+            if word_idx < len(word_boundaries) and sentences:
                 remaining = word_boundaries[word_idx:]
                 last = sentences[-1]
                 sentences[-1] = (last[0], last[1], remaining[-1][2])

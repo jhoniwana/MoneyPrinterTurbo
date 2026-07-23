@@ -1651,12 +1651,10 @@ def _apply_ass_subtitles_with_ffmpeg(input_video: str, output_video: str, ass_fi
         "-y",
         "-i", input_video,
         "-vf", f"ass='{escaped_ass_path}'",
-        "-af", "aresample=async=1:first_pts=0",
         "-c:v", "libx264",
         "-preset", "fast",
         "-crf", "23",
-        "-c:a", "aac",
-        "-b:a", "192k",
+        "-c:a", "copy",
         "-movflags", "+faststart",
         output_video,
     ]
