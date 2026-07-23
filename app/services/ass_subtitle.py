@@ -91,8 +91,8 @@ def _build_chunk_dialogue(
 
     ass_text = " ".join(parts)
 
-    start_time = _seconds_to_ass_time(max(0.0, chunk[0][1] + GLOBAL_OFFSET))
-    end_time = _seconds_to_ass_time(max(0.0, chunk[-1][2] + GLOBAL_OFFSET))
+    start_time = _seconds_to_ass_time(max(0.0, chunk[0][1]))
+    end_time = _seconds_to_ass_time(max(0.0, chunk[-1][2]))
 
     # \\q2 = no-wrap, \\pos = fixed position
     # No \\fad here — color transitions are handled by \\t transforms
@@ -192,7 +192,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         f.write('\n'.join(dialogue_lines))
         f.write('\n')
 
-    logger.info(f"TikTok-style ASS subtitle created: {subtitle_file} ({len(dialogue_lines)} lines, {GLOBAL_OFFSET*1000:.0f}ms offset)")
+    logger.info(f"TikTok-style ASS subtitle created: {subtitle_file} ({len(dialogue_lines)} lines)")
     return subtitle_file
 
 
