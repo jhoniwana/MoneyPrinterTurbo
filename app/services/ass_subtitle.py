@@ -18,7 +18,7 @@ from loguru import logger
 from app.config import config
 from app.utils import utils
 
-CHUNK_SIZE = 4
+CHUNK_SIZE = 1
 
 # Smooth color transition duration in ms (1 frame at 30fps)
 TRANSITION_MS = 30
@@ -221,12 +221,12 @@ def create_word_by_word_ass_from_edge_cues(
     sentences = []
 
     if hasattr(sub_maker, 'cues') and sub_maker.cues:
-        # Detect if cues are word-level or sentence-level by checking duration.
-        # Word-level cues: < 2s each; SentenceBoundary: typically 3-10s.
-        first_cue = sub_maker.cues[0]
-        first_duration = first_cue.end.total_seconds() - first_cue.start.total_seconds()
-
-        if first_duration > 2.5:
+        # Detect if cues are word-level or sentence-level.
+        # SentenceBoundary cues contain spaces (multiple words).
+        # WordBoundary cues are single tokens.
+        first_content = unescape(sub_maker.cues[0].content).strip()
+        is_sentence_level = " " in first_content
+        if is_sentence_level:
             # SentenceBoundary cues — use anchored proportional distribution
             logger.info("detected SentenceBoundary cues, using anchored distribution")
             for cue in sub_maker.cues:

@@ -84,6 +84,7 @@ _MIN_DIMENSION_TOLERANCE = 10
 _DEFAULT_VIDEO_CODEC = "libx264"
 _SUPPORTED_VIDEO_CODECS = (
     "libx264",
+    "h264_vaapi",
     "h264_nvenc",
     "h264_amf",
     "h264_qsv",
@@ -299,6 +300,16 @@ def _write_videofile_with_codec_fallback(clip, output_file: str, codec: str, **k
     生成任务不能因为高级编码器不可用而整体失败，所以这里把回退集中处理。
     """
     effective_codec = _get_effective_video_codec(codec)
+    # VAAPI requires extra FFmpeg params: device path + hwupload filter
+    if effective_codec == "h264_vaapi":
+        existing_params = list(kwargs.get("ffmpeg_params", []))
+        # Only add if not already present
+        if not any("vaapi_device" in str(p) for p in existing_params):
+            existing_params.extend([
+                "-vaapi_device", "/dev/dri/renderD128",
+                "-vf", "format=nv12,hwupload",
+            ])
+        kwargs["ffmpeg_params"] = existing_params
     try:
         clip.write_videofile(output_file, codec=effective_codec, **kwargs)
         return effective_codec
@@ -761,7 +772,7 @@ def _create_parallax_image_clip(image_path: str, duration: float = 3.0):
             return result.astype(np.uint8)
     
     clip = VideoClip(make_frame, duration=duration)
-    clip = clip.with_fps(30)
+    clip = clip.with_fps(24)
     return clip
 
 
