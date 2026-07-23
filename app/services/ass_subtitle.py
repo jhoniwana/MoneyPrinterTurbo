@@ -4,7 +4,7 @@ TikTok/CapCut-style ASS subtitle generator.
 Expert-optimized (v2 - no flickering, proper sync):
 - Single Dialogue line per chunk with \\t transform tags for word-by-word highlight
 - No overlapping lines (zero double-render artifacts)
-- GLOBAL_OFFSET +80ms to compensate for MP3/AAC encoder delay
+- FFmpeg aresample filter handles audio sync (no manual offset needed)
 - PlayResX: 1920 (wider layout region prevents text wrapping)
 - BorderStyle 1 (outline+shadow), white outline glow, Anton font
 """
