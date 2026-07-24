@@ -377,6 +377,7 @@ def _normalize_task_state(state):
         const.TASK_STATE_COMPLETE,
         const.TASK_STATE_FAILED,
         const.TASK_STATE_PROCESSING,
+        const.TASK_STATE_CANCELLED,
     ):
         return state
     try:
@@ -425,6 +426,8 @@ def _task_state_label(state, has_video):
         return tr("Task Status Complete")
     if normalized_state == const.TASK_STATE_FAILED:
         return tr("Task Status Failed")
+    if normalized_state == const.TASK_STATE_CANCELLED:
+        return tr("Task Stopped")
     if normalized_state == const.TASK_STATE_PROCESSING:
         return tr("Task Status Processing")
     if has_video:
@@ -438,6 +441,8 @@ def _task_state_filter_key(task):
         return "processing"
     if normalized_state == const.TASK_STATE_FAILED:
         return "failed"
+    if normalized_state == const.TASK_STATE_CANCELLED:
+        return "failed"  # Show cancelled tasks in the failed tab
     if normalized_state == const.TASK_STATE_COMPLETE or task["video_file"]:
         return "complete"
     return "history"
@@ -704,11 +709,30 @@ def _render_task_table(filtered_tasks, key_prefix):
                 row_cols[3].write(f"{task['progress']}%")
 
                 action_cols = row_cols[4].columns(
-                    4,
+                    5 if is_processing else 4,
                     vertical_alignment="center",
                     gap="small",
                 )
-                with action_cols[0]:
+                action_idx = 0
+
+                if is_processing:
+                    with action_cols[action_idx]:
+                        stop_label = tr("Stop")
+                        if st.button(
+                            stop_label,
+                            key=f"stop_task_{key_prefix}_{task_id}",
+                            use_container_width=True,
+                            icon=":material/stop:",
+                            help=stop_label,
+                        ):
+                            if sm.state.stop_task(task_id):
+                                st.toast(tr("Task Stopped"))
+                                st.rerun()
+                            else:
+                                st.warning(tr("Failed to stop task"))
+                    action_idx += 1
+
+                with action_cols[action_idx]:
                     play_label = tr("Play")
                     if st.button(
                         play_label,
@@ -720,7 +744,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _open_task_video(task["video_file"])
 
-                with action_cols[1]:
+                with action_cols[action_idx + 1]:
                     open_label = tr("Open Task Folder")
                     if st.button(
                         open_label,
@@ -731,7 +755,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _open_task_path(task["task_path"])
 
-                with action_cols[2]:
+                with action_cols[action_idx + 2]:
                     restore_label = tr("Regenerate Task")
                     if st.button(
                         restore_label,
@@ -743,7 +767,7 @@ def _render_task_table(filtered_tasks, key_prefix):
                     ):
                         _queue_task_restore(task_id)
 
-                with action_cols[3]:
+                with action_cols[action_idx + 3]:
                     delete_label = tr("Delete Task")
                     delete_help = (
                         f"{delete_label} ({tr('Task Status Processing')})"
@@ -1332,6 +1356,15 @@ def _render_generation_task_snapshot(task_id, task):
             progress,
             text=f"{tr('Task Progress')}: {progress}%",
         )
+        # Stop button for running tasks
+        col1, col2 = st.columns([1, 5])
+        with col1:
+            if st.button(tr("Stop"), key=f"stop_task_{task_id}", type="secondary"):
+                if sm.state.stop_task(task_id):
+                    st.toast(tr("Task Stopped"))
+                    st.rerun(scope="app")
+                else:
+                    st.warning(tr("Failed to stop task"))
         _render_generation_logs(task_id)
         return
 
@@ -1339,6 +1372,11 @@ def _render_generation_task_snapshot(task_id, task):
         error = str(task.get("error") or "").strip()
         message = tr("Video Generation Failed")
         st.error(f"{message}: {error}" if error else message)
+        _render_generation_logs(task_id)
+        return
+
+    if state == const.TASK_STATE_CANCELLED:
+        st.warning(tr("Task Stopped"))
         _render_generation_logs(task_id)
         return
 
@@ -1400,7 +1438,7 @@ def _render_running_generation_task(task_id):
         return
 
     state = _normalize_task_state((task or {}).get("state"))
-    if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
+    if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED}:
         _remove_active_generation_task(task_id)
         # 完整页面脚本现在没有耗时生成逻辑，可以安全 rerun 并把结果改为静态
         # 渲染。这样任务结束后不会让浏览器永久保留一个两秒轮询的 Fragment。
@@ -1425,7 +1463,7 @@ def _render_current_generation_task():
         return
 
     state = _normalize_task_state((task or {}).get("state"))
-    if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED}:
+    if state in {const.TASK_STATE_COMPLETE, const.TASK_STATE_FAILED, const.TASK_STATE_CANCELLED}:
         _remove_active_generation_task(task_id)
         _render_generation_task_snapshot(task_id, task)
         return

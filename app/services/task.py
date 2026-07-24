@@ -55,6 +55,11 @@ _CROSS_POST_STATE_RETRY_DELAY_SECONDS = 0.1
 _INTERRUPTED_CROSS_POST_ERROR = (
     "cross-posting was interrupted before the process completed"
 )
+
+
+class TaskCancelledException(Exception):
+    """Raised when a task is cancelled by the user."""
+    pass
 # 视频配乐服务只需实现 ``is_enabled`` 和 ``generate_bgm``。供应商差异集中在
 # 文件扩展名、领域异常和 WebUI 警告代码；任务编排、0 音量短路及失败降级
 # 全部复用同一路径，避免后续新增供应商时维护多份相似流程。
@@ -107,6 +112,19 @@ def is_task_busy(task: dict | None) -> bool:
         state == const.TASK_STATE_PROCESSING
         or task.get("cross_post_state") in _ACTIVE_CROSS_POST_STATES
     )
+
+
+def _is_task_cancelled(task_id: str) -> bool:
+    """Check if a task has been cancelled by the user."""
+    task = sm.state.get_task(task_id)
+    if not task:
+        return False
+    state = task.get("state")
+    try:
+        state = int(state)
+    except (TypeError, ValueError):
+        pass
+    return state == const.TASK_STATE_CANCELLED
 
 
 def _register_cross_post_future(task_id: str, future: Future) -> None:
@@ -698,6 +716,11 @@ def generate_final_videos(
     _progress = 50
     for i in range(params.video_count):
         index = i + 1
+
+        # Check for cancellation between video compositions
+        if _is_task_cancelled(task_id):
+            raise TaskCancelledException("Task cancelled by user")
+
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
         )
@@ -1118,6 +1141,10 @@ def _run_pipeline(
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
 
+    # Check for cancellation at start
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
+
     # 只有完整成片流程需要视频配乐供应商。尽早阻止缺少 Key 的完整任务，避免
     # 先消耗 LLM、TTS 和素材服务额度；中间产物接口仍可独立使用。
     video_music_provider = _VIDEO_MUSIC_PROVIDERS.get(params.bgm_type)
@@ -1169,6 +1196,10 @@ def _run_pipeline(
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
 
+    # Check for cancellation after script generation
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
+
     if stop_at == "script":
         sm.state.update_task(
             task_id, state=const.TASK_STATE_COMPLETE, progress=100, script=video_script
@@ -1187,6 +1218,10 @@ def _run_pipeline(
             )
 
     save_script_data(task_id, video_script, video_terms, params)
+
+    # Check for cancellation after terms generation
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
 
     if stop_at == "terms":
         sm.state.update_task(
@@ -1212,6 +1247,10 @@ def _run_pipeline(
 
     sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=30)
 
+    # Check for cancellation after audio generation
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
+
     if stop_at == "audio":
         sm.state.update_task(
             task_id,
@@ -1225,6 +1264,10 @@ def _run_pipeline(
     subtitle_path = generate_subtitle(
         task_id, params, video_script, sub_maker, audio_file
     )
+
+    # Check for cancellation after subtitle generation
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
 
     if stop_at == "subtitle":
         sm.state.update_task(
@@ -1248,6 +1291,10 @@ def _run_pipeline(
             "failed to prepare video materials",
         )
 
+    # Check for cancellation after materials download
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
+
     if stop_at == "materials":
         sm.state.update_task(
             task_id,
@@ -1263,6 +1310,10 @@ def _run_pipeline(
     # 这样可以避免 /subtitle 和 /audio 这类请求访问不存在的字段。
     if type(params.video_concat_mode) is str:
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
+
+    # Check for cancellation before video composition (longest step)
+    if _is_task_cancelled(task_id):
+        raise TaskCancelledException("Task cancelled by user")
 
     # 6. Generate final videos
     final_video_paths, combined_video_paths, generation_warnings = generate_final_videos(
@@ -1357,6 +1408,16 @@ def start(
             stop_at=stop_at,
             voice_preview=voice_preview,
         )
+    except TaskCancelledException:
+        # Task was cancelled by user - mark as cancelled, not failed
+        sm.state.update_task(
+            task_id,
+            state=const.TASK_STATE_CANCELLED,
+            progress=0,
+            error="Task cancelled by user",
+        )
+        logger.info(f"task {task_id} cancelled by user")
+        return {"task_id": task_id, "state": "cancelled"}
     except Exception as exc:
         logger.exception(
             f"unexpected task pipeline failure, task_id: {task_id}, error: {exc}"

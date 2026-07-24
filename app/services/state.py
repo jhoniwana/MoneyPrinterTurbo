@@ -39,6 +39,11 @@ class BaseState(ABC):
         """只更新已有任务的指定字段；任务不存在时返回 False。"""
         pass
 
+    @abstractmethod
+    def stop_task(self, task_id: str) -> bool:
+        """Mark a task as cancelled. Returns True if the task was found and updated."""
+        pass
+
 
 # Memory state management
 class MemoryState(BaseState):
@@ -92,6 +97,20 @@ class MemoryState(BaseState):
     def delete_task(self, task_id: str):
         with self._lock:
             self._tasks.pop(task_id, None)
+
+    def stop_task(self, task_id: str) -> bool:
+        """Mark a task as cancelled. Returns True if the task was found and updated."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            # Only cancel tasks that are currently processing
+            if task.get("state") != const.TASK_STATE_PROCESSING:
+                return False
+            task["state"] = const.TASK_STATE_CANCELLED
+            task["progress"] = 0
+            task["error"] = "Task cancelled by user"
+            return True
 
 
 # Redis state management
@@ -203,6 +222,24 @@ class RedisState(BaseState):
 
     def delete_task(self, task_id: str):
         self._redis.delete(task_id)
+
+    def stop_task(self, task_id: str) -> bool:
+        """Mark a task as cancelled. Returns True if the task was found and updated."""
+        # Get current task state
+        task = self.get_task(task_id)
+        if task is None:
+            return False
+        # Only cancel tasks that are currently processing
+        if task.get("state") != const.TASK_STATE_PROCESSING:
+            return False
+        # Update state to cancelled
+        self.update_task(
+            task_id,
+            state=const.TASK_STATE_CANCELLED,
+            progress=0,
+            error="Task cancelled by user",
+        )
+        return True
 
     @staticmethod
     def _convert_to_original_type(value):
